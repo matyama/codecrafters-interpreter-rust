@@ -1,8 +1,8 @@
 use std::fmt::Display;
+use std::ops::{Range, RangeInclusive};
 use std::process::{ExitCode, Termination};
 
 use crate::Report;
-use std::ops::Range;
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug)]
@@ -33,7 +33,7 @@ pub enum TokenType {
     // Literals
     //Identifier,
     String,
-    //Number
+    Number,
 
     // Keywords
     // TODO
@@ -65,6 +65,7 @@ impl Display for TokenType {
             Self::Less => write!(f, "LESS"),
             Self::LessEqual => write!(f, "LESS_EQUAL"),
             Self::String => write!(f, "STRING"),
+            Self::Number => write!(f, "NUMBER"),
             Self::EOF => write!(f, "EOF"),
         }
     }
@@ -73,12 +74,15 @@ impl Display for TokenType {
 #[derive(Debug)]
 pub enum Literal {
     Str(String),
+    Num(f64),
 }
 
 impl Display for Literal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Str(s) => write!(f, "{s}"),
+            Self::Num(n) if n.fract() > 0.0 => write!(f, "{n}"),
+            Self::Num(n) => write!(f, "{n:.1}"),
         }
     }
 }
@@ -137,14 +141,15 @@ impl Scanner {
         }
     }
 
+    // FIXME: this is terribly inefficient
     #[inline]
-    fn peek(&self) -> Option<char> {
-        // FIXME: this is terribly inefficient
-        self.source.chars().skip(self.current).take(1).next()
+    fn peek(&self, n: usize) -> Option<char> {
+        debug_assert!(n > 0, "zero look-ahead");
+        self.source.chars().nth(self.current + n - 1)
     }
 
     fn peek_eq(&mut self, expected: char) -> bool {
-        let Some(c) = self.peek() else {
+        let Some(c) = self.peek(1) else {
             return false;
         };
 
@@ -158,8 +163,7 @@ impl Scanner {
     }
 
     fn advance(&mut self) -> Option<char> {
-        // FIXME: this is terribly inefficient
-        let c = self.peek()?;
+        let c = self.peek(1)?;
         self.current += 1;
         Some(c)
     }
@@ -183,6 +187,20 @@ impl Scanner {
             .collect()
     }
 
+    fn number(&self, span: RangeInclusive<usize>) -> f64 {
+        // FIXME: this is terribly inefficient
+        let offset = *span.start();
+        let length = span.end() - span.start();
+
+        self.source
+            .chars()
+            .skip(offset)
+            .take(length)
+            .collect::<String>()
+            .parse()
+            .expect("f64")
+    }
+
     fn add_token(&mut self, ty: TokenType, literal: Option<Literal>) {
         self.tokens.push(Token {
             ty,
@@ -192,15 +210,19 @@ impl Scanner {
         })
     }
 
-    fn advance_until(&mut self, target: char, mut visit: impl FnMut(&mut Self, char)) -> bool {
-        while let Some(c) = self.peek() {
-            if c == target {
-                return false;
+    fn advance_until(
+        &mut self,
+        p: impl Fn(char) -> bool,
+        mut visit: impl FnMut(&mut Self, char),
+    ) -> Option<char> {
+        while let Some(c) = self.peek(1) {
+            if p(c) {
+                return Some(c);
             }
             visit(self, c);
             self.advance();
         }
-        true
+        None
     }
 
     pub fn tokenize(mut self) -> Result<Tokens, (Tokens, LexError)> {
@@ -235,7 +257,7 @@ impl Scanner {
                 // slash and comments
                 '/' => {
                     if self.peek_eq('/') {
-                        self.advance_until('\n', |_, _| {});
+                        self.advance_until(newline, noop);
                     } else {
                         self.add_token(TokenType::Slash, None);
                     }
@@ -247,16 +269,14 @@ impl Scanner {
 
                 // literal: string
                 '"' => {
-                    let eof = self.advance_until('"', |s, c| {
-                        if c == '\n' {
+                    let Some(_) = self.advance_until(double_quote, |s, c| {
+                        if newline(c) {
                             s.line += 1;
                         }
-                    });
-
-                    if eof {
+                    }) else {
                         self.report.error(self.line, "Unterminated string.");
                         continue;
-                    }
+                    };
 
                     // closing quote
                     self.advance();
@@ -265,6 +285,22 @@ impl Scanner {
                     let s = self.string((self.start + 1)..self.current);
 
                     self.add_token(TokenType::String, Some(Literal::Str(s)));
+                }
+
+                // literal: number
+                c if digit(c) => {
+                    let next = self.advance_until(non_digit, noop);
+
+                    if next.is_some_and(dot) && self.peek(2).is_some_and(digit) {
+                        // consume the '.'
+                        self.advance();
+
+                        self.advance_until(non_digit, noop);
+                    }
+
+                    let n = self.number(self.start..=self.current);
+
+                    self.add_token(TokenType::Number, Some(Literal::Num(n)));
                 }
 
                 // unexpected chars
@@ -289,6 +325,37 @@ impl Scanner {
         }
     }
 }
+
+fn noop(_: &mut Scanner, _: char) {}
+
+mod matcher {
+    #[inline]
+    pub(super) fn double_quote(c: char) -> bool {
+        c == '"'
+    }
+
+    #[inline]
+    pub(super) fn newline(c: char) -> bool {
+        c == '\n'
+    }
+
+    #[inline]
+    pub(super) fn dot(c: char) -> bool {
+        c == '.'
+    }
+
+    #[inline]
+    pub(super) fn digit(c: char) -> bool {
+        c.is_ascii_digit()
+    }
+
+    #[inline]
+    pub(super) fn non_digit(c: char) -> bool {
+        !digit(c)
+    }
+}
+
+use matcher::*;
 
 #[derive(Default)]
 struct ScanReport {
