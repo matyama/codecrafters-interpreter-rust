@@ -1,4 +1,7 @@
 use std::fmt::Display;
+use std::process::{ExitCode, Termination};
+
+use crate::Report;
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug)]
@@ -76,6 +79,8 @@ impl Display for Token {
     }
 }
 
+pub type Tokens = Vec<Token>;
+
 pub struct Scanner {
     source: String,
     tokens: Vec<Token>,
@@ -130,7 +135,7 @@ impl Scanner {
         })
     }
 
-    pub fn tokenize(mut self) -> Result<Vec<Token>, ScanReport> {
+    pub fn tokenize(mut self) -> Result<Tokens, (Tokens, LexError)> {
         let len = self.source.len();
 
         while self.current < len {
@@ -149,7 +154,9 @@ impl Scanner {
                 '*' => self.add_token(TokenType::Star, None),
                 '\n' => self.line += 1,
                 c if c.is_whitespace() => {}
-                _ => self.report.error(self.line, "Unexpected character"),
+                c => self
+                    .report
+                    .error(self.line, format!("Unexpected character: {c}")),
             }
         }
 
@@ -162,7 +169,7 @@ impl Scanner {
         });
 
         if self.report.had_error {
-            Err(self.report)
+            Err((self.tokens, LexError))
         } else {
             Ok(self.tokens)
         }
@@ -170,24 +177,28 @@ impl Scanner {
 }
 
 #[derive(Default)]
-pub struct ScanReport {
+struct ScanReport {
     had_error: bool,
 }
 
-trait Report {
-    fn report(&mut self, line: usize, location: &str, msg: &str);
-
-    fn error(&mut self, line: usize, msg: &str);
-}
-
 impl Report for ScanReport {
-    fn report(&mut self, line: usize, location: &str, msg: &str) {
+    fn report(&mut self, line: usize, location: &str, msg: impl Display) {
         eprintln!("[line {line}] Error{location}: {msg}");
         self.had_error = true;
     }
 
     #[inline]
-    fn error(&mut self, line: usize, msg: &str) {
+    fn error(&mut self, line: usize, msg: impl Display) {
         self.report(line, "", msg)
+    }
+}
+
+#[derive(Debug)]
+pub struct LexError;
+
+impl Termination for LexError {
+    #[inline]
+    fn report(self) -> ExitCode {
+        ExitCode::from(65)
     }
 }
