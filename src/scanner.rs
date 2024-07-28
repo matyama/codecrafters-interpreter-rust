@@ -20,6 +20,8 @@ pub enum TokenType {
     Star,
 
     // One or two character tokens
+    Bang,
+    BangEqual,
     Equal,
     EqualEqual,
     // TODO
@@ -48,6 +50,8 @@ impl Display for TokenType {
             TokenType::Semicolon => write!(f, "SEMICOLON"),
             //TokenType::Slash=> write!(f, "SLASH"),
             TokenType::Star => write!(f, "STAR"),
+            TokenType::Bang => write!(f, "BANG"),
+            TokenType::BangEqual => write!(f, "BANG_EQUAL"),
             TokenType::Equal => write!(f, "EQUAL"),
             TokenType::EqualEqual => write!(f, "EQUAL_EQUAL"),
             TokenType::EOF => write!(f, "EOF"),
@@ -170,6 +174,14 @@ impl Scanner {
                 '+' => self.add_token(TokenType::Plus, None),
                 ';' => self.add_token(TokenType::Semicolon, None),
                 '*' => self.add_token(TokenType::Star, None),
+                '!' => {
+                    let ty = if self.peek_eq('=') {
+                        TokenType::BangEqual
+                    } else {
+                        TokenType::Bang
+                    };
+                    self.add_token(ty, None)
+                }
                 '=' => {
                     let ty = if self.peek_eq('=') {
                         TokenType::EqualEqual
