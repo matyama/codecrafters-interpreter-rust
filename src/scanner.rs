@@ -2,6 +2,7 @@ use std::fmt::Display;
 use std::process::{ExitCode, Termination};
 
 use crate::Report;
+use std::ops::Range;
 
 #[allow(clippy::upper_case_acronyms)]
 #[derive(Debug)]
@@ -30,7 +31,9 @@ pub enum TokenType {
     LessEqual,
 
     // Literals
-    // TODO
+    //Identifier,
+    String,
+    //Number
 
     // Keywords
     // TODO
@@ -42,36 +45,41 @@ pub enum TokenType {
 impl Display for TokenType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TokenType::LeftParen => write!(f, "LEFT_PAREN"),
-            TokenType::RightParen => write!(f, "RIGHT_PAREN"),
-            TokenType::LeftBrace => write!(f, "LEFT_BRACE"),
-            TokenType::RightBrace => write!(f, "RIGHT_BRACE"),
-            TokenType::Comma => write!(f, "COMMA"),
-            TokenType::Dot => write!(f, "DOT"),
-            TokenType::Minus => write!(f, "MINUS"),
-            TokenType::Plus => write!(f, "PLUS"),
-            TokenType::Semicolon => write!(f, "SEMICOLON"),
-            TokenType::Slash => write!(f, "SLASH"),
-            TokenType::Star => write!(f, "STAR"),
-            TokenType::Bang => write!(f, "BANG"),
-            TokenType::BangEqual => write!(f, "BANG_EQUAL"),
-            TokenType::Equal => write!(f, "EQUAL"),
-            TokenType::EqualEqual => write!(f, "EQUAL_EQUAL"),
-            TokenType::Greater => write!(f, "GREATER"),
-            TokenType::GreaterEqual => write!(f, "GREATER_EQUAL"),
-            TokenType::Less => write!(f, "LESS"),
-            TokenType::LessEqual => write!(f, "LESS_EQUAL"),
-            TokenType::EOF => write!(f, "EOF"),
+            Self::LeftParen => write!(f, "LEFT_PAREN"),
+            Self::RightParen => write!(f, "RIGHT_PAREN"),
+            Self::LeftBrace => write!(f, "LEFT_BRACE"),
+            Self::RightBrace => write!(f, "RIGHT_BRACE"),
+            Self::Comma => write!(f, "COMMA"),
+            Self::Dot => write!(f, "DOT"),
+            Self::Minus => write!(f, "MINUS"),
+            Self::Plus => write!(f, "PLUS"),
+            Self::Semicolon => write!(f, "SEMICOLON"),
+            Self::Slash => write!(f, "SLASH"),
+            Self::Star => write!(f, "STAR"),
+            Self::Bang => write!(f, "BANG"),
+            Self::BangEqual => write!(f, "BANG_EQUAL"),
+            Self::Equal => write!(f, "EQUAL"),
+            Self::EqualEqual => write!(f, "EQUAL_EQUAL"),
+            Self::Greater => write!(f, "GREATER"),
+            Self::GreaterEqual => write!(f, "GREATER_EQUAL"),
+            Self::Less => write!(f, "LESS"),
+            Self::LessEqual => write!(f, "LESS_EQUAL"),
+            Self::String => write!(f, "STRING"),
+            Self::EOF => write!(f, "EOF"),
         }
     }
 }
 
 #[derive(Debug)]
-pub enum Literal {}
+pub enum Literal {
+    Str(String),
+}
 
 impl Display for Literal {
-    fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Ok(())
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Str(s) => write!(f, "{s}"),
+        }
     }
 }
 
@@ -166,6 +174,15 @@ impl Scanner {
             .collect()
     }
 
+    fn string(&self, span: Range<usize>) -> String {
+        // FIXME: this is terribly inefficient
+        self.source
+            .chars()
+            .skip(span.start)
+            .take(span.len() - 1)
+            .collect()
+    }
+
     fn add_token(&mut self, ty: TokenType, literal: Option<Literal>) {
         self.tokens.push(Token {
             ty,
@@ -173,6 +190,17 @@ impl Scanner {
             literal,
             line: self.line,
         })
+    }
+
+    fn advance_until(&mut self, target: char, mut visit: impl FnMut(&mut Self, char)) -> bool {
+        while let Some(c) = self.peek() {
+            if c == target {
+                return false;
+            }
+            visit(self, c);
+            self.advance();
+        }
+        true
     }
 
     pub fn tokenize(mut self) -> Result<Tokens, (Tokens, LexError)> {
@@ -186,6 +214,7 @@ impl Scanner {
             };
 
             match c {
+                // single character tokens
                 '(' => self.add_token(TokenType::LeftParen, None),
                 ')' => self.add_token(TokenType::RightParen, None),
                 '{' => self.add_token(TokenType::LeftBrace, None),
@@ -196,24 +225,49 @@ impl Scanner {
                 '+' => self.add_token(TokenType::Plus, None),
                 ';' => self.add_token(TokenType::Semicolon, None),
                 '*' => self.add_token(TokenType::Star, None),
+
+                // negation, (in)equality, negation, and relational operators
                 '!' => add_token! { self; if '=' { BangEqual } else { Bang } },
                 '=' => add_token! { self; if '=' { EqualEqual } else { Equal } },
                 '<' => add_token! { self; if '=' { LessEqual } else { Less} },
                 '>' => add_token! { self; if '=' { GreaterEqual } else { Greater } },
+
+                // slash and comments
                 '/' => {
                     if self.peek_eq('/') {
-                        while let Some(c) = self.peek() {
-                            if c == '\n' {
-                                break;
-                            }
-                            self.advance();
-                        }
+                        self.advance_until('\n', |_, _| {});
                     } else {
                         self.add_token(TokenType::Slash, None);
                     }
                 }
+
+                // whitespace characters
                 '\n' => self.line += 1,
                 c if c.is_whitespace() => {}
+
+                // literal: string
+                '"' => {
+                    let eof = self.advance_until('"', |s, c| {
+                        if c == '\n' {
+                            s.line += 1;
+                        }
+                    });
+
+                    if eof {
+                        self.report.error(self.line, "Unterminated string.");
+                        continue;
+                    }
+
+                    // closing quote
+                    self.advance();
+
+                    // trim quotes
+                    let s = self.string((self.start + 1)..self.current);
+
+                    self.add_token(TokenType::String, Some(Literal::Str(s)));
+                }
+
+                // unexpected chars
                 c => self
                     .report
                     .error(self.line, format!("Unexpected character: {c}")),
