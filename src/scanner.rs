@@ -16,7 +16,7 @@ pub enum TokenType {
     Minus,
     Plus,
     Semicolon,
-    //Slash,
+    Slash,
     Star,
 
     // One or two character tokens
@@ -51,7 +51,7 @@ impl Display for TokenType {
             TokenType::Minus => write!(f, "MINUS"),
             TokenType::Plus => write!(f, "PLUS"),
             TokenType::Semicolon => write!(f, "SEMICOLON"),
-            //TokenType::Slash=> write!(f, "SLASH"),
+            TokenType::Slash => write!(f, "SLASH"),
             TokenType::Star => write!(f, "STAR"),
             TokenType::Bang => write!(f, "BANG"),
             TokenType::BangEqual => write!(f, "BANG_EQUAL"),
@@ -149,11 +149,11 @@ impl Scanner {
         true
     }
 
-    fn advance(&mut self) -> char {
+    fn advance(&mut self) -> Option<char> {
         // FIXME: this is terribly inefficient
-        let c = self.peek().unwrap();
+        let c = self.peek()?;
         self.current += 1;
-        c
+        Some(c)
     }
 
     /// Returns source text at `start..current`
@@ -181,7 +181,11 @@ impl Scanner {
         while self.current < len {
             self.start = self.current;
 
-            match self.advance() {
+            let Some(c) = self.advance() else {
+                break;
+            };
+
+            match c {
                 '(' => self.add_token(TokenType::LeftParen, None),
                 ')' => self.add_token(TokenType::RightParen, None),
                 '{' => self.add_token(TokenType::LeftBrace, None),
@@ -196,6 +200,18 @@ impl Scanner {
                 '=' => add_token! { self; if '=' { EqualEqual } else { Equal } },
                 '<' => add_token! { self; if '=' { LessEqual } else { Less} },
                 '>' => add_token! { self; if '=' { GreaterEqual } else { Greater } },
+                '/' => {
+                    if self.peek_eq('/') {
+                        while let Some(c) = self.peek() {
+                            if c == '\n' {
+                                break;
+                            }
+                            self.advance();
+                        }
+                    } else {
+                        self.add_token(TokenType::Slash, None);
+                    }
+                }
                 '\n' => self.line += 1,
                 c if c.is_whitespace() => {}
                 c => self
