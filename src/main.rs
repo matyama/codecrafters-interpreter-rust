@@ -1,5 +1,9 @@
+mod scanner;
+
 use std::env;
 use std::fs;
+
+use crate::scanner::Scanner;
 
 fn main() {
     let args = env::args().collect::<Vec<_>>();
@@ -19,11 +23,12 @@ fn main() {
                 String::new()
             });
 
-            if !file_contents.is_empty() {
-                panic!("Scanner not implemented");
-            } else {
-                // Placeholder, remove this line when implementing the scanner
-                println!("EOF  null");
+            let scanner = Scanner::new(file_contents);
+
+            if let Ok(tokens) = scanner.tokenize() {
+                for token in tokens {
+                    println!("{token}");
+                }
             }
         }
         _ => {
