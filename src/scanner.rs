@@ -6,6 +6,8 @@ pub enum TokenType {
     // Single character tokens
     LeftParen,
     RightParen,
+    LeftBrace,
+    RightBrace,
 
     // One or two character tokens
     // TODO
@@ -25,6 +27,8 @@ impl Display for TokenType {
         match self {
             TokenType::LeftParen => write!(f, "LEFT_PAREN"),
             TokenType::RightParen => write!(f, "RIGHT_PAREN"),
+            TokenType::LeftBrace => write!(f, "LEFT_BRACE"),
+            TokenType::RightBrace => write!(f, "RIGHT_BRACE"),
             TokenType::EOF => write!(f, "EOF"),
         }
     }
@@ -121,6 +125,8 @@ impl Scanner {
             match self.advance() {
                 '(' => self.add_token(TokenType::LeftParen, None),
                 ')' => self.add_token(TokenType::RightParen, None),
+                '{' => self.add_token(TokenType::LeftBrace, None),
+                '}' => self.add_token(TokenType::RightBrace, None),
                 '\n' => self.line += 1,
                 c if c.is_whitespace() => {}
                 _ => self.report.error(self.line, "Unexpected character"),
