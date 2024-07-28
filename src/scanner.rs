@@ -8,6 +8,13 @@ pub enum TokenType {
     RightParen,
     LeftBrace,
     RightBrace,
+    Comma,
+    Dot,
+    Minus,
+    Plus,
+    Semicolon,
+    //Slash,
+    Star,
 
     // One or two character tokens
     // TODO
@@ -29,6 +36,13 @@ impl Display for TokenType {
             TokenType::RightParen => write!(f, "RIGHT_PAREN"),
             TokenType::LeftBrace => write!(f, "LEFT_BRACE"),
             TokenType::RightBrace => write!(f, "RIGHT_BRACE"),
+            TokenType::Comma => write!(f, "COMMA"),
+            TokenType::Dot => write!(f, "DOT"),
+            TokenType::Minus => write!(f, "MINUS"),
+            TokenType::Plus => write!(f, "PLUS"),
+            TokenType::Semicolon => write!(f, "SEMICOLON"),
+            //TokenType::Slash=> write!(f, "SLASH"),
+            TokenType::Star => write!(f, "STAR"),
             TokenType::EOF => write!(f, "EOF"),
         }
     }
@@ -127,6 +141,12 @@ impl Scanner {
                 ')' => self.add_token(TokenType::RightParen, None),
                 '{' => self.add_token(TokenType::LeftBrace, None),
                 '}' => self.add_token(TokenType::RightBrace, None),
+                ',' => self.add_token(TokenType::Comma, None),
+                '.' => self.add_token(TokenType::Dot, None),
+                '-' => self.add_token(TokenType::Minus, None),
+                '+' => self.add_token(TokenType::Plus, None),
+                ';' => self.add_token(TokenType::Semicolon, None),
+                '*' => self.add_token(TokenType::Star, None),
                 '\n' => self.line += 1,
                 c if c.is_whitespace() => {}
                 _ => self.report.error(self.line, "Unexpected character"),
