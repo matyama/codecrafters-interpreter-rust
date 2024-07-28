@@ -31,7 +31,7 @@ pub enum TokenType {
     LessEqual,
 
     // Literals
-    //Identifier,
+    Identifier,
     String,
     Number,
 
@@ -64,6 +64,7 @@ impl Display for TokenType {
             Self::GreaterEqual => write!(f, "GREATER_EQUAL"),
             Self::Less => write!(f, "LESS"),
             Self::LessEqual => write!(f, "LESS_EQUAL"),
+            Self::Identifier => write!(f, "IDENTIFIER"),
             Self::String => write!(f, "STRING"),
             Self::Number => write!(f, "NUMBER"),
             Self::EOF => write!(f, "EOF"),
@@ -303,6 +304,11 @@ impl Scanner {
                     self.add_token(TokenType::Number, Some(Literal::Num(n)));
                 }
 
+                c if alpha(c) => {
+                    self.advance_until(non_alphanumeric, noop);
+                    self.add_token(TokenType::Identifier, None);
+                }
+
                 // unexpected chars
                 c => self
                     .report
@@ -352,6 +358,21 @@ mod matcher {
     #[inline]
     pub(super) fn non_digit(c: char) -> bool {
         !digit(c)
+    }
+
+    #[inline]
+    pub(super) fn alpha(c: char) -> bool {
+        c.is_ascii_alphabetic() || c == '_'
+    }
+
+    #[inline]
+    pub(super) fn alphanumeric(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '_'
+    }
+
+    #[inline]
+    pub(super) fn non_alphanumeric(c: char) -> bool {
+        !alphanumeric(c)
     }
 }
 
