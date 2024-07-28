@@ -20,6 +20,8 @@ pub enum TokenType {
     Star,
 
     // One or two character tokens
+    Equal,
+    EqualEqual,
     // TODO
 
     // Literals
@@ -46,6 +48,8 @@ impl Display for TokenType {
             TokenType::Semicolon => write!(f, "SEMICOLON"),
             //TokenType::Slash=> write!(f, "SLASH"),
             TokenType::Star => write!(f, "STAR"),
+            TokenType::Equal => write!(f, "EQUAL"),
+            TokenType::EqualEqual => write!(f, "EQUAL_EQUAL"),
             TokenType::EOF => write!(f, "EOF"),
         }
     }
@@ -103,15 +107,29 @@ impl Scanner {
         }
     }
 
+    #[inline]
+    fn peek(&self) -> Option<char> {
+        // FIXME: this is terribly inefficient
+        self.source.chars().skip(self.current).take(1).next()
+    }
+
+    fn peek_eq(&mut self, expected: char) -> bool {
+        let Some(c) = self.peek() else {
+            return false;
+        };
+
+        if c != expected {
+            return false;
+        }
+
+        self.current += 1;
+
+        true
+    }
+
     fn advance(&mut self) -> char {
         // FIXME: this is terribly inefficient
-        let c = self
-            .source
-            .chars()
-            .skip(self.current)
-            .take(1)
-            .next()
-            .unwrap();
+        let c = self.peek().unwrap();
         self.current += 1;
         c
     }
@@ -152,6 +170,14 @@ impl Scanner {
                 '+' => self.add_token(TokenType::Plus, None),
                 ';' => self.add_token(TokenType::Semicolon, None),
                 '*' => self.add_token(TokenType::Star, None),
+                '=' => {
+                    let ty = if self.peek_eq('=') {
+                        TokenType::EqualEqual
+                    } else {
+                        TokenType::Equal
+                    };
+                    self.add_token(ty, None)
+                }
                 '\n' => self.line += 1,
                 c if c.is_whitespace() => {}
                 c => self
