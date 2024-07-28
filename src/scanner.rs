@@ -1,11 +1,39 @@
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::{Range, RangeInclusive};
 use std::process::{ExitCode, Termination};
+use std::sync::OnceLock;
 
 use crate::Report;
+use matcher::*;
+
+static KEYWORDS: OnceLock<HashMap<&str, TokenType>> = OnceLock::new();
+
+fn init_keywords() -> HashMap<&'static str, TokenType> {
+    let mut keywords = HashMap::with_capacity(16);
+
+    keywords.insert("and", TokenType::And);
+    keywords.insert("class", TokenType::Class);
+    keywords.insert("else", TokenType::Else);
+    keywords.insert("false", TokenType::False);
+    keywords.insert("for", TokenType::For);
+    keywords.insert("fun", TokenType::Fun);
+    keywords.insert("if", TokenType::If);
+    keywords.insert("nil", TokenType::Nil);
+    keywords.insert("or", TokenType::Or);
+    keywords.insert("print", TokenType::Print);
+    keywords.insert("return", TokenType::Return);
+    keywords.insert("super", TokenType::Super);
+    keywords.insert("this", TokenType::This);
+    keywords.insert("true", TokenType::True);
+    keywords.insert("var", TokenType::Var);
+    keywords.insert("while", TokenType::While);
+
+    keywords
+}
 
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum TokenType {
     // Single character tokens
     LeftParen,
@@ -36,7 +64,22 @@ pub enum TokenType {
     Number,
 
     // Keywords
-    // TODO
+    And,
+    Class,
+    Else,
+    False,
+    Fun,
+    For,
+    If,
+    Nil,
+    Or,
+    Print,
+    Return,
+    Super,
+    This,
+    True,
+    Var,
+    While,
 
     // End Of File
     EOF,
@@ -67,6 +110,22 @@ impl Display for TokenType {
             Self::Identifier => write!(f, "IDENTIFIER"),
             Self::String => write!(f, "STRING"),
             Self::Number => write!(f, "NUMBER"),
+            Self::And => write!(f, "AND"),
+            Self::Class => write!(f, "CLASS"),
+            Self::Else => write!(f, "ELSE"),
+            Self::False => write!(f, "FALSE"),
+            Self::Fun => write!(f, "FUN"),
+            Self::For => write!(f, "FOR"),
+            Self::If => write!(f, "IF"),
+            Self::Nil => write!(f, "NIL"),
+            Self::Or => write!(f, "OR"),
+            Self::Print => write!(f, "PRINT"),
+            Self::Return => write!(f, "RETURN"),
+            Self::Super => write!(f, "SUPER"),
+            Self::This => write!(f, "THIS"),
+            Self::True => write!(f, "TRUE"),
+            Self::Var => write!(f, "VAR"),
+            Self::While => write!(f, "WHILE"),
             Self::EOF => write!(f, "EOF"),
         }
     }
@@ -170,7 +229,7 @@ impl Scanner {
     }
 
     /// Returns source text at `start..current`
-    fn lexeme(&self) -> String {
+    fn text(&self) -> String {
         // FIXME: this is terribly inefficient
         self.source
             .chars()
@@ -205,7 +264,7 @@ impl Scanner {
     fn add_token(&mut self, ty: TokenType, literal: Option<Literal>) {
         self.tokens.push(Token {
             ty,
-            lexeme: self.lexeme(),
+            lexeme: self.text(),
             literal,
             line: self.line,
         })
@@ -306,7 +365,16 @@ impl Scanner {
 
                 c if alpha(c) => {
                     self.advance_until(non_alphanumeric, noop);
-                    self.add_token(TokenType::Identifier, None);
+
+                    let text = self.text();
+
+                    let ty = KEYWORDS
+                        .get_or_init(init_keywords)
+                        .get(text.as_str())
+                        .copied()
+                        .unwrap_or(TokenType::Identifier);
+
+                    self.add_token(ty, None);
                 }
 
                 // unexpected chars
@@ -375,8 +443,6 @@ mod matcher {
         !alphanumeric(c)
     }
 }
-
-use matcher::*;
 
 #[derive(Default)]
 struct ScanReport {
