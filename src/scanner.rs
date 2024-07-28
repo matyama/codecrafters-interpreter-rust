@@ -24,7 +24,10 @@ pub enum TokenType {
     BangEqual,
     Equal,
     EqualEqual,
-    // TODO
+    Greater,
+    GreaterEqual,
+    Less,
+    LessEqual,
 
     // Literals
     // TODO
@@ -54,6 +57,10 @@ impl Display for TokenType {
             TokenType::BangEqual => write!(f, "BANG_EQUAL"),
             TokenType::Equal => write!(f, "EQUAL"),
             TokenType::EqualEqual => write!(f, "EQUAL_EQUAL"),
+            TokenType::Greater => write!(f, "GREATER"),
+            TokenType::GreaterEqual => write!(f, "GREATER_EQUAL"),
+            TokenType::Less => write!(f, "LESS"),
+            TokenType::LessEqual => write!(f, "LESS_EQUAL"),
             TokenType::EOF => write!(f, "EOF"),
         }
     }
@@ -88,6 +95,17 @@ impl Display for Token {
 }
 
 pub type Tokens = Vec<Token>;
+
+macro_rules! add_token {
+    ($s:ident; if $lit:literal { $x:ident } else { $y:ident }) => {{
+        let ty = if $s.peek_eq($lit) {
+            TokenType::$x
+        } else {
+            TokenType::$y
+        };
+        $s.add_token(ty, None)
+    }};
+}
 
 pub struct Scanner {
     source: String,
@@ -174,22 +192,10 @@ impl Scanner {
                 '+' => self.add_token(TokenType::Plus, None),
                 ';' => self.add_token(TokenType::Semicolon, None),
                 '*' => self.add_token(TokenType::Star, None),
-                '!' => {
-                    let ty = if self.peek_eq('=') {
-                        TokenType::BangEqual
-                    } else {
-                        TokenType::Bang
-                    };
-                    self.add_token(ty, None)
-                }
-                '=' => {
-                    let ty = if self.peek_eq('=') {
-                        TokenType::EqualEqual
-                    } else {
-                        TokenType::Equal
-                    };
-                    self.add_token(ty, None)
-                }
+                '!' => add_token! { self; if '=' { BangEqual } else { Bang } },
+                '=' => add_token! { self; if '=' { EqualEqual } else { Equal } },
+                '<' => add_token! { self; if '=' { LessEqual } else { Less} },
+                '>' => add_token! { self; if '=' { GreaterEqual } else { Greater } },
                 '\n' => self.line += 1,
                 c if c.is_whitespace() => {}
                 c => self
