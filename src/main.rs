@@ -1,4 +1,5 @@
 mod scanner;
+mod token;
 
 use std::env;
 use std::fmt::Display;
