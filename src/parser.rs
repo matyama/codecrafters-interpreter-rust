@@ -5,6 +5,86 @@ use crate::expr::{Expr, Literal};
 use crate::token::{Token, TokenType, Tokens};
 use crate::{Report, Span};
 
+macro_rules! rule {
+
+    // models: expression → equality ;
+    ($head:ident -> $rule:ident ;) => {
+        fn $head(&mut self) -> Result<Expr, ParseError> {
+            self.$rule()
+        }
+    };
+
+    // models: equality → comparison ( ( "!=" | "==" ) comparison )* ;
+    ($($head:ident -> $lhs:ident (($ty0:ident $(| $ty:ident)*) $rhs:ident)$_:tt ;)+) => {
+        $(
+            fn $head(&mut self) -> Result<Expr, ParseError> {
+                let mut expr = self.$lhs()?;
+
+                while let TokenType::$ty0 $(| TokenType::$ty)* = self.peek_ty() {
+                    let op = self.advance();
+                    let rhs = self.$rhs()?;
+
+                    expr = Expr::Binary {
+                        lhs: Box::new(expr),
+                        op,
+                        rhs: Box::new(rhs),
+                    };
+                }
+
+                Ok(expr)
+            }
+        )+
+    };
+
+    // models: unary → ( "!" | "-" ) unary | primary ;
+    ($($head:ident -> ($ty0:ident $(| $ty:ident)*) $rhs:ident | $primary:ident ;)+) => {
+        $(
+            fn $head(&mut self) -> Result<Expr, ParseError> {
+                if let TokenType::$ty0 $(| TokenType::$ty)* = self.peek_ty() {
+                    let op = self.advance();
+                    let rhs = self.$rhs()?;
+
+                    Ok(Expr::Unary {
+                        op,
+                        rhs: Box::new(rhs),
+                    })
+                } else {
+                    self.$primary()
+                }
+            }
+        )+
+    };
+
+    // models: primary → NUMBER | STRING | "true" | "false" | "nil" | "(" expression ")" ;
+    ($head:ident -> $ty0:ident $(| $ty:ident)* | ( $group:ident ) ;) => {
+        fn $head(&mut self) -> Result<Expr, ParseError> {
+            match self.peek() {
+                token if matches!(token.ty, TokenType::$ty0 $(| TokenType::$ty)*) => {
+                    let lit = Literal::from(token);
+                    self.current += 1;
+                    Ok(Expr::Literal(lit))
+                }
+
+                token if matches!(token.ty, TokenType::LeftParen) => {
+                    self.current += 1;
+                    let expr = self.$group()?;
+
+                    match self.peek() {
+                        token if matches!(token.ty, TokenType::RightParen) => {
+                            self.current += 1;
+                            Ok(Expr::Grouping(Box::new(expr)))
+                        }
+                        token => Err(ParseError::new(token, "Expect ')' after expression.")),
+                    }
+                }
+
+                token => Err(ParseError::new(token, "Expect expression.")),
+            }
+        }
+    }
+
+}
+
 /// Recursive descent parser for the Lox language
 pub struct Parser {
     tokens: Tokens,
@@ -50,126 +130,23 @@ impl Parser {
         self.expression()
     }
 
-    // expression → equality ;
-    fn expression(&mut self) -> Result<Expr, ParseError> {
-        self.equality()
+    rule! {
+        expression -> equality ;
     }
 
-    // equality → comparison ( ( "!=" | "==" ) comparison )* ;
-    fn equality(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.comparison()?;
-
-        while let TokenType::BangEqual | TokenType::EqualEqual = self.peek_ty() {
-            let op = self.advance();
-            let rhs = self.comparison()?;
-
-            expr = Expr::Binary {
-                lhs: Box::new(expr),
-                op,
-                rhs: Box::new(rhs),
-            };
-        }
-
-        Ok(expr)
+    rule! {
+        equality   -> comparison ( (BangEqual | EqualEqual) comparison)* ;
+        comparison -> term ( (Greater | GreaterEqual | Less | LessEqual) term )* ;
+        term       -> factor ( (Minus | Plus) factor)* ;
+        factor     -> unary ( (Slash | Star ) unary )* ;
     }
 
-    // comparison → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
-    fn comparison(&mut self) -> Result<Expr, ParseError> {
-        use TokenType::*;
-
-        let mut expr = self.term()?;
-
-        while let Greater | GreaterEqual | Less | LessEqual = self.peek_ty() {
-            let op = self.advance();
-            let rhs = self.term()?;
-
-            expr = Expr::Binary {
-                lhs: Box::new(expr),
-                op,
-                rhs: Box::new(rhs),
-            };
-        }
-
-        Ok(expr)
+    rule! {
+        unary      -> (Bang | Minus) unary | primary ;
     }
 
-    // term → factor ( ( "-" | "+" ) factor )* ;
-    fn term(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.factor()?;
-
-        while let TokenType::Minus | TokenType::Plus = self.peek_ty() {
-            let op = self.advance();
-            let rhs = self.factor()?;
-
-            expr = Expr::Binary {
-                lhs: Box::new(expr),
-                op,
-                rhs: Box::new(rhs),
-            };
-        }
-
-        Ok(expr)
-    }
-
-    // factor → unary ( ( "/" | "*" ) unary )* ;
-    fn factor(&mut self) -> Result<Expr, ParseError> {
-        let mut expr = self.unary()?;
-
-        while let TokenType::Slash | TokenType::Star = self.peek_ty() {
-            let op = self.advance();
-            let rhs = self.unary()?;
-
-            expr = Expr::Binary {
-                lhs: Box::new(expr),
-                op,
-                rhs: Box::new(rhs),
-            };
-        }
-
-        Ok(expr)
-    }
-
-    // unary → ( "!" | "-" ) unary | primary ;
-    fn unary(&mut self) -> Result<Expr, ParseError> {
-        if let TokenType::Bang | TokenType::Minus = self.peek_ty() {
-            let op = self.advance();
-            let rhs = self.unary()?;
-
-            Ok(Expr::Unary {
-                op,
-                rhs: Box::new(rhs),
-            })
-        } else {
-            self.primary()
-        }
-    }
-
-    // primary → NUMBER | STRING | "true" | "false" | "nil" | "(" expression ")" ;
-    fn primary(&mut self) -> Result<Expr, ParseError> {
-        use TokenType::*;
-
-        match self.peek() {
-            token if matches!(token.ty, False | True | Nil | Number | String) => {
-                let lit = Literal::from(token);
-                self.current += 1;
-                Ok(Expr::Literal(lit))
-            }
-
-            token if matches!(token.ty, LeftParen) => {
-                self.current += 1;
-                let expr = self.expression()?;
-
-                match self.peek() {
-                    token if matches!(token.ty, RightParen) => {
-                        self.current += 1;
-                        Ok(Expr::Grouping(Box::new(expr)))
-                    }
-                    token => Err(ParseError::new(token, "Expect ')' after expression.")),
-                }
-            }
-
-            token => Err(ParseError::new(token, "Expect expression.")),
-        }
+    rule! {
+        primary    -> Number | String | True | False | Nil | ( expression ) ;
     }
 }
 
