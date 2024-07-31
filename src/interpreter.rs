@@ -1,4 +1,4 @@
-use std::any::{Any, TypeId};
+use std::any::Any;
 use std::fmt::Display;
 
 use crate::expr::{Binary, Expr, Grouping, Literal, Unary};
@@ -13,11 +13,10 @@ pub enum Value {
 
 impl Value {
     /// Implements Ruby's rule: `false` and `nil` are false and everything else is true
-    fn into_bool(self) -> Self {
+    fn into_bool(self) -> bool {
         match self {
-            Self::Object(obj) if (*obj).type_id() == TypeId::of::<bool>() => Self::Object(obj),
-            Self::Object(_) => Self::from(Some(true)),
-            Self::Nil => Self::from(Some(false)),
+            Self::Object(obj) => obj.downcast::<bool>().map_or(true, |b| *b),
+            Self::Nil => false,
         }
     }
 
@@ -99,7 +98,7 @@ impl Interpret for Unary {
         let value = self.rhs.interpret()?;
 
         match self.op.ty {
-            TokenType::Bang => Ok(value.into_bool()),
+            TokenType::Bang => Ok(Value::from(Some(!value.into_bool()))),
 
             TokenType::Minus => {
                 let Value::Object(mut v) = value else {
