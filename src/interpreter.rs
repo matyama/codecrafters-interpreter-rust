@@ -24,7 +24,27 @@ impl Value {
         match (self, rhs) {
             (Self::Nil, Self::Nil) => true,
             (Self::Nil, _) | (_, Self::Nil) => false,
-            (Self::Object(_lhs), Self::Object(_rhs)) => todo!("implement"),
+            (Self::Object(lhs), Self::Object(rhs)) => {
+                if let (Some(lhs), Some(rhs)) =
+                    (lhs.downcast_ref::<String>(), rhs.downcast_ref::<String>())
+                {
+                    return lhs == rhs;
+                }
+
+                if let (Some(lhs), Some(rhs)) =
+                    (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>())
+                {
+                    return lhs == rhs;
+                }
+
+                if let (Some(lhs), Some(rhs)) =
+                    (lhs.downcast_ref::<bool>(), rhs.downcast_ref::<bool>())
+                {
+                    return lhs == rhs;
+                }
+
+                false
+            }
         }
     }
 }
