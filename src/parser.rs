@@ -11,11 +11,26 @@ pub struct Parser {
     current: usize,
 }
 
-// TODO: make this less Java-like
 impl Parser {
     #[inline]
     pub fn new(tokens: Tokens) -> Self {
         Self { tokens, current: 0 }
+    }
+
+    #[inline]
+    fn peek(&self) -> &Token {
+        &self.tokens[self.current]
+    }
+
+    #[inline]
+    fn peek_ty(&self) -> TokenType {
+        self.peek().ty
+    }
+
+    fn advance(&mut self) -> Token {
+        let token = self.peek().clone();
+        self.current += 1;
+        token
     }
 
     /// Parse a sequence of tokens according to the following grammar:
@@ -44,8 +59,8 @@ impl Parser {
     fn equality(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.comparison()?;
 
-        while self.any([TokenType::BangEqual, TokenType::EqualEqual]) {
-            let op = self.previous().clone();
+        while let TokenType::BangEqual | TokenType::EqualEqual = self.peek_ty() {
+            let op = self.advance();
             let rhs = self.comparison()?;
 
             expr = Expr::Binary {
@@ -60,15 +75,12 @@ impl Parser {
 
     // comparison → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
     fn comparison(&mut self) -> Result<Expr, ParseError> {
+        use TokenType::*;
+
         let mut expr = self.term()?;
 
-        while self.any([
-            TokenType::Greater,
-            TokenType::GreaterEqual,
-            TokenType::Less,
-            TokenType::LessEqual,
-        ]) {
-            let op = self.previous().clone();
+        while let Greater | GreaterEqual | Less | LessEqual = self.peek_ty() {
+            let op = self.advance();
             let rhs = self.term()?;
 
             expr = Expr::Binary {
@@ -85,8 +97,8 @@ impl Parser {
     fn term(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.factor()?;
 
-        while self.any([TokenType::Minus, TokenType::Plus]) {
-            let op = self.previous().clone();
+        while let TokenType::Minus | TokenType::Plus = self.peek_ty() {
+            let op = self.advance();
             let rhs = self.factor()?;
 
             expr = Expr::Binary {
@@ -103,8 +115,8 @@ impl Parser {
     fn factor(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.unary()?;
 
-        while self.any([TokenType::Slash, TokenType::Star]) {
-            let op = self.previous().clone();
+        while let TokenType::Slash | TokenType::Star = self.peek_ty() {
+            let op = self.advance();
             let rhs = self.unary()?;
 
             expr = Expr::Binary {
@@ -119,8 +131,8 @@ impl Parser {
 
     // unary → ( "!" | "-" ) unary | primary ;
     fn unary(&mut self) -> Result<Expr, ParseError> {
-        if self.any([TokenType::Bang, TokenType::Minus]) {
-            let op = self.previous().clone();
+        if let TokenType::Bang | TokenType::Minus = self.peek_ty() {
+            let op = self.advance();
             let rhs = self.unary()?;
 
             Ok(Expr::Unary {
@@ -134,72 +146,30 @@ impl Parser {
 
     // primary → NUMBER | STRING | "true" | "false" | "nil" | "(" expression ")" ;
     fn primary(&mut self) -> Result<Expr, ParseError> {
-        if self.any([
-            TokenType::False,
-            TokenType::True,
-            TokenType::Nil,
-            TokenType::Number,
-            TokenType::String,
-        ]) {
-            let lit = Literal::from(self.previous());
-            return Ok(Expr::Literal(lit));
-        }
+        use TokenType::*;
 
-        if self.any([TokenType::LeftParen]) {
-            let expr = self.expression()?;
-            self.consume(TokenType::RightParen, "Expect ')' after expression.")?;
-            return Ok(Expr::Grouping(Box::new(expr)));
-        }
-
-        Err(ParseError::new(self.peek(), "Expect expression."))
-    }
-
-    fn consume(&mut self, ty: TokenType, msg: &str) -> Result<&Token, ParseError> {
-        if self.check(ty) {
-            Ok(self.advance())
-        } else {
-            Err(ParseError::new(self.peek(), msg))
-        }
-    }
-
-    fn any<const N: usize>(&mut self, types: [TokenType; N]) -> bool {
-        for ty in types {
-            if self.check(ty) {
-                self.advance();
-                return true;
+        match self.peek() {
+            token if matches!(token.ty, False | True | Nil | Number | String) => {
+                let lit = Literal::from(token);
+                self.current += 1;
+                Ok(Expr::Literal(lit))
             }
+
+            token if matches!(token.ty, LeftParen) => {
+                self.current += 1;
+                let expr = self.expression()?;
+
+                match self.peek() {
+                    token if matches!(token.ty, RightParen) => {
+                        self.current += 1;
+                        Ok(Expr::Grouping(Box::new(expr)))
+                    }
+                    token => Err(ParseError::new(token, "Expect ')' after expression.")),
+                }
+            }
+
+            token => Err(ParseError::new(token, "Expect expression.")),
         }
-        false
-    }
-
-    fn check(&self, ty: TokenType) -> bool {
-        if self.is_at_end() {
-            false
-        } else {
-            self.peek().ty == ty
-        }
-    }
-
-    fn advance(&mut self) -> &Token {
-        if !self.is_at_end() {
-            self.current += 1;
-        }
-        self.previous()
-    }
-
-    #[inline]
-    fn is_at_end(&self) -> bool {
-        matches!(self.peek().ty, TokenType::EOF)
-    }
-
-    #[inline]
-    fn peek(&self) -> &Token {
-        &self.tokens[self.current]
-    }
-
-    #[inline]
-    fn previous(&self) -> &Token {
-        &self.tokens[self.current - 1]
     }
 }
 

@@ -39,7 +39,6 @@ impl From<&Token> for Literal {
     }
 }
 
-// TODO: try Box -> <'a>
 #[derive(Debug)]
 pub enum Expr {
     Binary {
