@@ -1,8 +1,10 @@
 use std::any::Any;
 use std::fmt::Display;
+use std::process::{ExitCode, Termination};
 
 use crate::expr::{Binary, Expr, Grouping, Literal, Unary};
-use crate::token::TokenType;
+use crate::token::{Token, TokenType};
+use crate::{Report, Span};
 
 // NOTE: Here we model the nature of Lox as a dynamically typed language.
 #[derive(Debug)]
@@ -122,12 +124,12 @@ impl Interpret for Unary {
 
             TokenType::Minus => {
                 let Value::Object(mut v) = value else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operand must be a number."));
                 };
 
                 match v.downcast_mut::<f64>() {
                     Some(v) => *v = -*v,
-                    None => panic!("failed at {v:?}"),
+                    None => return Err(RuntimeError::new(self.op, "Operand must be a number.")),
                 }
 
                 Ok(Value::Object(v))
@@ -146,26 +148,32 @@ impl Interpret for Binary {
         match self.op.ty {
             TokenType::Minus => {
                 let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
                     (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs - rhs))),
-                    (lhs, rhs) => panic!("failed at {lhs:?} - {rhs:?}"),
+                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
                 }
             }
 
             TokenType::Plus => {
                 let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(
+                        self.op,
+                        "Operands must be two numbers or two strings.",
+                    ));
                 };
 
                 let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(
+                        self.op,
+                        "Operands must be two numbers or two strings.",
+                    ));
                 };
 
                 if let (Some(lhs), Some(rhs)) =
@@ -179,97 +187,100 @@ impl Interpret for Binary {
                         lhs.push_str(rhs.as_str());
                         Ok(Value::Object(lhs))
                     }
-                    (lhs, rhs) => panic!("failed at {lhs:?} - {rhs:?}"),
+                    _ => Err(RuntimeError::new(
+                        self.op,
+                        "Operands must be two numbers or two strings.",
+                    )),
                 }
             }
 
             TokenType::Slash => {
                 let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
                     (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs / rhs))),
-                    (lhs, rhs) => panic!("failed at {lhs:?} / {rhs:?}"),
+                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
                 }
             }
 
             TokenType::Star => {
                 let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
                     (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs * rhs))),
-                    (lhs, rhs) => panic!("failed at {lhs:?} * {rhs:?}"),
+                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
                 }
             }
 
             TokenType::Greater => {
                 let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
                     (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs > rhs))),
-                    (lhs, rhs) => panic!("failed at {lhs:?} > {rhs:?}"),
+                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
                 }
             }
 
             TokenType::GreaterEqual => {
                 let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
                     (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs >= rhs))),
-                    (lhs, rhs) => panic!("failed at {lhs:?} >= {rhs:?}"),
+                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
                 }
             }
 
             TokenType::Less => {
                 let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
                     (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs < rhs))),
-                    (lhs, rhs) => panic!("failed at {lhs:?} < {rhs:?}"),
+                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
                 }
             }
 
             TokenType::LessEqual => {
                 let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError);
+                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
                 };
 
                 match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
                     (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs <= rhs))),
-                    (lhs, rhs) => panic!("failed at {lhs:?} <= {rhs:?}"),
+                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
                 }
             }
 
@@ -281,6 +292,34 @@ impl Interpret for Binary {
     }
 }
 
-// TODO: logging
 #[derive(Debug)]
 pub struct RuntimeError;
+
+impl RuntimeError {
+    #[inline]
+    pub fn new(token: Token, msg: impl Display) -> Self {
+        Self.error(Span::Token(&token), &msg);
+        Self
+    }
+}
+
+impl Report for RuntimeError {
+    fn report(&mut self, line: usize, _location: &str, msg: impl Display) {
+        eprintln!("{msg}\n[line {line}]");
+    }
+
+    #[inline]
+    fn error(&mut self, span: Span<'_>, msg: impl Display) {
+        match span {
+            Span::Line(line) => self.report(line, "", msg),
+            Span::Token(token) => self.report(token.line, "", msg),
+        }
+    }
+}
+
+impl Termination for RuntimeError {
+    #[inline]
+    fn report(self) -> ExitCode {
+        ExitCode::from(70)
+    }
+}

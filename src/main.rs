@@ -116,7 +116,7 @@ fn main() -> impl Termination {
                     println!("{value}");
                     ExitCode::SUCCESS
                 }
-                Err(_error) => ExitCode::from(65),
+                Err(error) => error.report(),
             }
         }
 
