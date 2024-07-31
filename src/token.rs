@@ -28,7 +28,7 @@ fn init_keywords() -> HashMap<&'static str, TokenType> {
 }
 
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TokenType {
     // Single character tokens
     LeftParen,
@@ -136,7 +136,7 @@ impl Display for TokenType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Literal {
     Str(String),
     Num(f64),
@@ -152,12 +152,11 @@ impl Display for Literal {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Token {
     pub(crate) ty: TokenType,
     pub(crate) lexeme: String,
     pub(crate) literal: Option<Literal>,
-    #[allow(dead_code)]
     pub(crate) line: usize,
 }
 

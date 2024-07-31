@@ -1,17 +1,45 @@
+mod expr;
+mod parser;
 mod scanner;
 mod token;
 
 use std::env;
 use std::fmt::Display;
 use std::fs;
-
-use crate::scanner::Scanner;
+use std::path::Path;
 use std::process::{ExitCode, Termination};
+
+use parser::Parser;
+use scanner::Scanner;
+use token::Token;
 
 pub(crate) trait Report {
     fn report(&mut self, line: usize, location: &str, msg: impl Display);
 
-    fn error(&mut self, line: usize, msg: impl Display);
+    fn error(&mut self, span: Span<'_>, msg: impl Display);
+}
+
+pub(crate) enum Span<'a> {
+    Line(usize),
+    Token(&'a Token),
+}
+
+impl Span<'_> {
+    #[inline]
+    pub fn line(&self) -> usize {
+        match self {
+            Self::Line(line) => *line,
+            Self::Token(token) => token.line,
+        }
+    }
+}
+
+fn read_file_contents(file: impl AsRef<Path>) -> String {
+    let file = file.as_ref();
+    fs::read_to_string(file).unwrap_or_else(|_| {
+        eprintln!("Failed to read file {file:?}");
+        String::new()
+    })
 }
 
 fn main() -> impl Termination {
@@ -27,10 +55,7 @@ fn main() -> impl Termination {
 
     match command.as_str() {
         "tokenize" => {
-            let file_contents = fs::read_to_string(filename).unwrap_or_else(|_| {
-                eprintln!("Failed to read file {filename}");
-                String::new()
-            });
+            let file_contents = read_file_contents(filename);
 
             let scanner = Scanner::new(file_contents);
 
@@ -45,6 +70,28 @@ fn main() -> impl Termination {
 
             exit_code
         }
+
+        "parse" => {
+            let file_contents = read_file_contents(filename);
+
+            let scanner = Scanner::new(file_contents);
+
+            let tokens = match scanner.tokenize() {
+                Ok(tokens) => tokens,
+                Err((_, error)) => return error.report(),
+            };
+
+            let parser = Parser::new(tokens);
+
+            match parser.parse() {
+                Ok(expr) => {
+                    println!("{expr}");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => error.report(),
+            }
+        }
+
         _ => {
             eprintln!("Unknown command: {command}");
             ExitCode::FAILURE

@@ -3,7 +3,7 @@ use std::ops::{Range, RangeInclusive};
 use std::process::{ExitCode, Termination};
 
 use crate::token::{Literal, Token, TokenType, Tokens};
-use crate::Report;
+use crate::{Report, Span};
 use matcher::*;
 
 macro_rules! add_token {
@@ -123,6 +123,11 @@ impl Scanner {
         None
     }
 
+    #[inline]
+    fn report_error(&mut self, msg: impl Display) {
+        self.report.error(Span::Line(self.line), msg);
+    }
+
     pub fn tokenize(mut self) -> Result<Tokens, (Tokens, LexError)> {
         let len = self.source.len();
 
@@ -172,7 +177,7 @@ impl Scanner {
                             s.line += 1;
                         }
                     }) else {
-                        self.report.error(self.line, "Unterminated string.");
+                        self.report_error("Unterminated string.");
                         continue;
                     };
 
@@ -209,9 +214,7 @@ impl Scanner {
                 }
 
                 // unexpected chars
-                c => self
-                    .report
-                    .error(self.line, format!("Unexpected character: {c}")),
+                c => self.report_error(format!("Unexpected character: {c}")),
             }
         }
 
@@ -281,8 +284,8 @@ impl Report for ScanReport {
     }
 
     #[inline]
-    fn error(&mut self, line: usize, msg: impl Display) {
-        self.report(line, "", msg)
+    fn error(&mut self, span: Span<'_>, msg: impl Display) {
+        self.report(span.line(), "", msg)
     }
 }
 
