@@ -40,30 +40,61 @@ impl From<&Token> for Literal {
 }
 
 #[derive(Debug)]
+#[repr(transparent)]
+pub struct Grouping(pub(crate) Box<Expr>);
+
+#[derive(Debug)]
+pub struct Unary {
+    pub(crate) op: Token,
+    pub(crate) rhs: Box<Expr>,
+}
+
+#[derive(Debug)]
+pub struct Binary {
+    pub(crate) lhs: Box<Expr>,
+    pub(crate) op: Token,
+    pub(crate) rhs: Box<Expr>,
+}
+
+#[derive(Debug)]
 pub enum Expr {
-    Binary {
-        lhs: Box<Expr>,
-        op: Token,
-        rhs: Box<Expr>,
-    },
-
-    Grouping(Box<Expr>),
-
+    Binary(Binary),
+    Grouping(Grouping),
     Literal(Literal),
+    Unary(Unary),
+}
 
-    Unary {
-        op: Token,
-        rhs: Box<Expr>,
-    },
+impl Expr {
+    #[inline]
+    pub fn group(expr: Expr) -> Self {
+        Self::Grouping(Grouping(Box::new(expr)))
+    }
+
+    #[inline]
+    pub fn unary(op: Token, rhs: Expr) -> Self {
+        Self::Unary(Unary {
+            op,
+            rhs: Box::new(rhs),
+        })
+    }
+
+    #[inline]
+    pub fn binary(lhs: Expr, op: Token, rhs: Expr) -> Self {
+        Self::Binary(Binary {
+            lhs: Box::new(lhs),
+            op,
+            rhs: Box::new(rhs),
+        })
+    }
 }
 
 impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Binary { lhs, op, rhs } => write!(f, "({} {lhs} {rhs})", op.lexeme),
-            Self::Grouping(expr) => write!(f, "(group {expr})"),
+            Self::Binary(Binary { lhs, op, rhs }) => write!(f, "({} {lhs} {rhs})", op.lexeme),
+            Self::Grouping(Grouping(expr)) => write!(f, "(group {expr})"),
             Self::Literal(lit) => write!(f, "{lit}"),
-            Self::Unary { op, rhs } => write!(f, "({} {rhs})", op.lexeme),
+            Self::Unary(Unary { op, rhs }) => write!(f, "({} {rhs})", op.lexeme),
         }
     }
 }
@@ -74,24 +105,24 @@ mod tests {
 
     #[test]
     fn pretty_print() {
-        let expr = Expr::Binary {
-            lhs: Box::new(Expr::Unary {
-                op: Token {
+        let expr = Expr::binary(
+            Expr::unary(
+                Token {
                     ty: TokenType::Minus,
                     lexeme: "-".to_string(),
                     literal: None,
                     line: 1,
                 },
-                rhs: Box::new(Expr::Literal(Literal::Num(123.0))),
-            }),
-            op: Token {
+                Expr::Literal(Literal::Num(123.0)),
+            ),
+            Token {
                 ty: TokenType::Star,
                 lexeme: "*".to_string(),
                 literal: None,
                 line: 1,
             },
-            rhs: Box::new(Expr::Grouping(Box::new(Expr::Literal(Literal::Num(45.67))))),
-        };
+            Expr::group(Expr::Literal(Literal::Num(45.67))),
+        );
 
         assert_eq!("(* (- 123.0) (group 45.67))", expr.to_string());
     }

@@ -23,12 +23,7 @@ macro_rules! rule {
                 while let TokenType::$ty0 $(| TokenType::$ty)* = self.peek_ty() {
                     let op = self.advance();
                     let rhs = self.$rhs()?;
-
-                    expr = Expr::Binary {
-                        lhs: Box::new(expr),
-                        op,
-                        rhs: Box::new(rhs),
-                    };
+                    expr = Expr::binary(expr, op, rhs);
                 }
 
                 Ok(expr)
@@ -43,11 +38,7 @@ macro_rules! rule {
                 if let TokenType::$ty0 $(| TokenType::$ty)* = self.peek_ty() {
                     let op = self.advance();
                     let rhs = self.$rhs()?;
-
-                    Ok(Expr::Unary {
-                        op,
-                        rhs: Box::new(rhs),
-                    })
+                    Ok(Expr::unary(op, rhs))
                 } else {
                     self.$primary()
                 }
@@ -72,7 +63,7 @@ macro_rules! rule {
                     match self.peek() {
                         token if matches!(token.ty, TokenType::RightParen) => {
                             self.current += 1;
-                            Ok(Expr::Grouping(Box::new(expr)))
+                            Ok(Expr::group(expr))
                         }
                         token => Err(ParseError::new(token, "Expect ')' after expression.")),
                     }

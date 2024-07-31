@@ -1,4 +1,5 @@
 mod expr;
+mod interpreter;
 mod parser;
 mod scanner;
 mod token;
@@ -9,6 +10,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{ExitCode, Termination};
 
+use interpreter::Interpret as _;
 use parser::Parser;
 use scanner::Scanner;
 use token::Token;
@@ -89,6 +91,32 @@ fn main() -> impl Termination {
                     ExitCode::SUCCESS
                 }
                 Err(error) => error.report(),
+            }
+        }
+
+        "evaluate" => {
+            let file_contents = read_file_contents(filename);
+
+            let scanner = Scanner::new(file_contents);
+
+            let tokens = match scanner.tokenize() {
+                Ok(tokens) => tokens,
+                Err((_, error)) => return error.report(),
+            };
+
+            let parser = Parser::new(tokens);
+
+            let expr = match parser.parse() {
+                Ok(expr) => expr,
+                Err(error) => return error.report(),
+            };
+
+            match expr.interpret() {
+                Ok(value) => {
+                    println!("{value}");
+                    ExitCode::SUCCESS
+                }
+                Err(_error) => ExitCode::from(65),
             }
         }
 
