@@ -48,11 +48,7 @@ impl Display for Value {
         }
 
         if let Some(n) = obj.downcast_ref::<f64>() {
-            return if n.fract() > 0.0 {
-                write!(f, "{n}")
-            } else {
-                write!(f, "{n:.1}")
-            };
+            return write!(f, "{n}");
         }
 
         if let Some(b) = obj.downcast_ref::<bool>() {
