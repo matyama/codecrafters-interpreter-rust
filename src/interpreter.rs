@@ -6,77 +6,147 @@ use crate::expr::{Binary, Expr, Grouping, Literal, Unary};
 use crate::token::{Token, TokenType};
 use crate::{Report, Span};
 
-// NOTE: Here we model the nature of Lox as a dynamically typed language.
 #[derive(Debug)]
-pub enum Value {
-    Object(Box<dyn Any>),
-    Nil,
-}
+#[repr(transparent)]
+pub struct Object(Box<dyn Any>);
 
-impl Value {
-    /// Implements Ruby's rule: `false` and `nil` are false and everything else is true
-    fn into_bool(self) -> bool {
-        match self {
-            Self::Object(obj) => obj.downcast::<bool>().map_or(true, |b| *b),
-            Self::Nil => false,
-        }
-    }
-
-    fn eq(self, rhs: Self) -> bool {
-        match (self, rhs) {
-            (Self::Nil, Self::Nil) => true,
-            (Self::Nil, _) | (_, Self::Nil) => false,
-            (Self::Object(lhs), Self::Object(rhs)) => {
-                if let (Some(lhs), Some(rhs)) =
-                    (lhs.downcast_ref::<String>(), rhs.downcast_ref::<String>())
-                {
-                    return lhs == rhs;
-                }
-
-                if let (Some(lhs), Some(rhs)) =
-                    (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>())
-                {
-                    return lhs == rhs;
-                }
-
-                if let (Some(lhs), Some(rhs)) =
-                    (lhs.downcast_ref::<bool>(), rhs.downcast_ref::<bool>())
-                {
-                    return lhs == rhs;
-                }
-
-                false
-            }
-        }
-    }
-}
-
-impl<T: 'static> From<Option<T>> for Value {
+impl Object {
     #[inline]
-    fn from(value: Option<T>) -> Self {
-        value.map_or(Self::Nil, |v| Self::Object(Box::new(v)))
+    pub fn new<T: 'static>(value: T) -> Self {
+        Self(Box::new(value))
+    }
+
+    pub fn map<T: 'static>(mut self, f: impl FnOnce(&mut T)) -> Result<Self, Self> {
+        match self.0.downcast_mut::<T>() {
+            Some(v) => {
+                f(v);
+                Ok(self)
+            }
+            None => Err(self),
+        }
+    }
+
+    pub fn combine<T: 'static, U: 'static>(
+        self,
+        other: Self,
+        f: impl Fn(&T, &T) -> U,
+    ) -> Result<Self, (Self, Self)> {
+        match (self.0.downcast_ref::<T>(), other.0.downcast_ref::<T>()) {
+            (Some(lhs), Some(rhs)) => Ok(Self::new(f(lhs, rhs))),
+            _ => Err((self, other)),
+        }
     }
 }
 
-impl Display for Value {
+impl Display for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self::Object(obj) = self else {
-            return write!(f, "nil");
-        };
-
-        if let Some(s) = obj.downcast_ref::<String>() {
+        if let Some(s) = self.0.downcast_ref::<String>() {
             return write!(f, "{s}");
         }
 
-        if let Some(n) = obj.downcast_ref::<f64>() {
+        if let Some(n) = self.0.downcast_ref::<f64>() {
             return write!(f, "{n}");
         }
 
-        if let Some(b) = obj.downcast_ref::<bool>() {
+        if let Some(b) = self.0.downcast_ref::<bool>() {
             return write!(f, "{b}");
         }
 
         Err(std::fmt::Error)
+    }
+}
+
+impl PartialEq for Object {
+    fn eq(&self, other: &Self) -> bool {
+        let lhs = self.0.downcast_ref::<String>();
+        let rhs = other.0.downcast_ref::<String>();
+
+        if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
+            return lhs == rhs;
+        }
+
+        let lhs = self.0.downcast_ref::<f64>();
+        let rhs = other.0.downcast_ref::<f64>();
+
+        if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
+            return lhs == rhs;
+        }
+
+        let lhs = self.0.downcast_ref::<bool>();
+        let rhs = other.0.downcast_ref::<bool>();
+
+        if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
+            return lhs == rhs;
+        }
+
+        false
+    }
+}
+
+impl Eq for Object {}
+
+// NOTE: Here we model the nature of Lox as a dynamically typed language.
+#[derive(Debug)]
+pub enum Value {
+    Object(Object),
+    Nil,
+}
+
+impl Value {
+    #[inline]
+    pub fn obj<T: 'static>(obj: T) -> Self {
+        Self::Object(Object::new(obj))
+    }
+
+    /// Implements Ruby's rule: `false` and `nil` are false and everything else is true
+    fn into_bool(self) -> bool {
+        match self {
+            Self::Object(Object(obj)) => obj.downcast::<bool>().map_or(true, |b| *b),
+            Self::Nil => false,
+        }
+    }
+
+    pub fn map<T: 'static>(self, f: impl FnOnce(&mut T)) -> Result<Self, Self> {
+        match self {
+            Self::Object(obj) => obj.map::<T>(f).map(Self::Object).map_err(Self::Object),
+            Self::Nil => Err(self),
+        }
+    }
+
+    pub fn combine<T: 'static, U: 'static>(
+        self,
+        other: Self,
+        f: impl Fn(&T, &T) -> U,
+    ) -> Result<Self, (Self, Self)> {
+        match (self, other) {
+            (Self::Object(lhs), Self::Object(rhs)) => lhs
+                .combine(rhs, f)
+                .map(Self::Object)
+                .map_err(|(lhs, rhs)| (Self::Object(lhs), Self::Object(rhs))),
+            (lhs, rhs) => Err((lhs, rhs)),
+        }
+    }
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Nil, Self::Nil) => true,
+            (Self::Nil, _) | (_, Self::Nil) => false,
+            (Self::Object(lhs), Self::Object(rhs)) => lhs == rhs,
+        }
+    }
+}
+
+impl Eq for Value {}
+
+impl Display for Value {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Object(obj) => obj.fmt(f),
+            Self::Nil => write!(f, "nil"),
+        }
     }
 }
 
@@ -88,10 +158,10 @@ impl Interpret for Expr {
     #[inline]
     fn interpret(self) -> Result<Value, RuntimeError> {
         match self {
-            Expr::Binary(binary) => binary.interpret(),
-            Expr::Grouping(group) => group.interpret(),
-            Expr::Literal(lit) => lit.interpret(),
-            Expr::Unary(unary) => unary.interpret(),
+            Self::Binary(binary) => binary.interpret(),
+            Self::Grouping(group) => group.interpret(),
+            Self::Literal(lit) => lit.interpret(),
+            Self::Unary(unary) => unary.interpret(),
         }
     }
 }
@@ -107,9 +177,9 @@ impl Interpret for Literal {
     #[inline]
     fn interpret(self) -> Result<Value, RuntimeError> {
         Ok(match self {
-            Self::Str(s) => Value::from(Some(s)),
-            Self::Num(n) => Value::from(Some(n)),
-            Self::Bool(b) => Value::from(Some(b)),
+            Self::Str(s) => Value::obj(s),
+            Self::Num(n) => Value::obj(n),
+            Self::Bool(b) => Value::obj(b),
             Self::None => Value::Nil,
         })
     }
@@ -120,20 +190,11 @@ impl Interpret for Unary {
         let value = self.rhs.interpret()?;
 
         match self.op.ty {
-            TokenType::Bang => Ok(Value::from(Some(!value.into_bool()))),
+            TokenType::Bang => Ok(Value::obj(!value.into_bool())),
 
-            TokenType::Minus => {
-                let Value::Object(mut v) = value else {
-                    return Err(RuntimeError::new(self.op, "Operand must be a number."));
-                };
-
-                match v.downcast_mut::<f64>() {
-                    Some(v) => *v = -*v,
-                    None => return Err(RuntimeError::new(self.op, "Operand must be a number.")),
-                }
-
-                Ok(Value::Object(v))
-            }
+            TokenType::Minus => value
+                .map::<f64>(|v| *v = -*v)
+                .map_err(|_| RuntimeError::new(self.op, "Operand must be a number.")),
 
             ty => unreachable!("unary token type: {ty}"),
         }
@@ -146,30 +207,19 @@ impl Interpret for Binary {
         let rhs = self.rhs.interpret()?;
 
         match self.op.ty {
-            TokenType::Minus => {
-                let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
-
-                let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
-
-                match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
-                    (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs - rhs))),
-                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
-                }
-            }
+            TokenType::Minus => lhs
+                .combine::<f64, f64>(rhs, |x, y| x - y)
+                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
 
             TokenType::Plus => {
-                let Value::Object(lhs) = lhs else {
+                let Value::Object(Object(mut lhs)) = lhs else {
                     return Err(RuntimeError::new(
                         self.op,
                         "Operands must be two numbers or two strings.",
                     ));
                 };
 
-                let Value::Object(rhs) = rhs else {
+                let Value::Object(Object(rhs)) = rhs else {
                     return Err(RuntimeError::new(
                         self.op,
                         "Operands must be two numbers or two strings.",
@@ -179,13 +229,13 @@ impl Interpret for Binary {
                 if let (Some(lhs), Some(rhs)) =
                     (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>())
                 {
-                    return Ok(Value::from(Some(lhs + rhs)));
+                    return Ok(Value::obj(lhs + rhs));
                 }
 
-                match (lhs.downcast::<String>(), rhs.downcast::<String>()) {
-                    (Ok(mut lhs), Ok(rhs)) => {
-                        lhs.push_str(rhs.as_str());
-                        Ok(Value::Object(lhs))
+                match (lhs.downcast_mut::<String>(), rhs.downcast_ref::<String>()) {
+                    (Some(left), Some(right)) => {
+                        left.push_str(right);
+                        Ok(Value::Object(Object(lhs)))
                     }
                     _ => Err(RuntimeError::new(
                         self.op,
@@ -194,98 +244,32 @@ impl Interpret for Binary {
                 }
             }
 
-            TokenType::Slash => {
-                let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
+            TokenType::Slash => lhs
+                .combine::<f64, f64>(rhs, |x, y| x / y)
+                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
 
-                let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
+            TokenType::Star => lhs
+                .combine::<f64, f64>(rhs, |x, y| x * y)
+                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
 
-                match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
-                    (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs / rhs))),
-                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
-                }
-            }
+            TokenType::Greater => lhs
+                .combine::<f64, bool>(rhs, |x, y| x > y)
+                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
 
-            TokenType::Star => {
-                let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
+            TokenType::GreaterEqual => lhs
+                .combine::<f64, bool>(rhs, |x, y| x >= y)
+                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
 
-                let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
+            TokenType::Less => lhs
+                .combine::<f64, bool>(rhs, |x, y| x < y)
+                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
 
-                match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
-                    (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs * rhs))),
-                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
-                }
-            }
+            TokenType::LessEqual => lhs
+                .combine::<f64, bool>(rhs, |x, y| x <= y)
+                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
 
-            TokenType::Greater => {
-                let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
-
-                let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
-
-                match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
-                    (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs > rhs))),
-                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
-                }
-            }
-
-            TokenType::GreaterEqual => {
-                let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
-
-                let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
-
-                match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
-                    (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs >= rhs))),
-                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
-                }
-            }
-
-            TokenType::Less => {
-                let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
-
-                let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
-
-                match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
-                    (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs < rhs))),
-                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
-                }
-            }
-
-            TokenType::LessEqual => {
-                let Value::Object(lhs) = lhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
-
-                let Value::Object(rhs) = rhs else {
-                    return Err(RuntimeError::new(self.op, "Operands must be numbers."));
-                };
-
-                match (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>()) {
-                    (Some(lhs), Some(rhs)) => Ok(Value::from(Some(lhs <= rhs))),
-                    _ => Err(RuntimeError::new(self.op, "Operands must be numbers.")),
-                }
-            }
-
-            TokenType::BangEqual => Ok(Value::from(Some(!Value::eq(lhs, rhs)))),
-            TokenType::EqualEqual => Ok(Value::from(Some(Value::eq(lhs, rhs)))),
+            TokenType::BangEqual => Ok(Value::obj(lhs != rhs)),
+            TokenType::EqualEqual => Ok(Value::obj(lhs == rhs)),
 
             ty => unreachable!("binary token type: {ty}"),
         }
