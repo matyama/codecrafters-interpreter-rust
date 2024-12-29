@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
-use crate::token::{Token, TokenType};
+use crate::span::Span;
+use crate::token::{LexToken, Token};
 
 #[derive(Default, Clone, Debug)]
 pub enum Literal {
@@ -23,18 +24,17 @@ impl Display for Literal {
     }
 }
 
-impl From<&Token> for Literal {
-    fn from(token: &Token) -> Self {
-        use crate::token::Literal::*;
-        match token.ty {
-            TokenType::Nil => Self::None,
-            TokenType::False => Self::Bool(false),
-            TokenType::True => Self::Bool(true),
-            _ => match &token.literal {
-                None => Self::None,
-                Some(Str(s)) => Self::Str(s.clone()),
-                Some(Num(n)) => Self::Num(*n),
-            },
+impl From<&LexToken<'_>> for Literal {
+    fn from(token: &LexToken) -> Self {
+        use crate::token::{Keyword::*, Literal::*};
+
+        match &token.token {
+            Token::Keyword(True) => Self::Bool(true),
+            Token::Keyword(False) => Self::Bool(false),
+            Token::Keyword(Nil) => Self::None,
+            Token::Literal(Str(s)) => Self::Str(s.to_string()),
+            Token::Literal(Num(n)) => Self::Num(*n),
+            _ => Self::None,
         }
     }
 }
@@ -44,15 +44,75 @@ impl From<&Token> for Literal {
 pub struct Grouping(pub(crate) Box<Expr>);
 
 #[derive(Debug)]
+pub struct Operator {
+    // TODO: try to borrow the lexeme (or use LexToken instead of Operator)
+    pub(crate) lexeme: String,
+    pub(crate) token: OperatorToken,
+    pub(crate) span: Span,
+}
+
+impl From<&LexToken<'_>> for Option<Operator> {
+    fn from(token: &LexToken<'_>) -> Self {
+        Some(Operator {
+            lexeme: token.lexeme.to_string(),
+            token: Into::<Option<OperatorToken>>::into(&token.token)?,
+            span: token.span.clone(),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OperatorToken {
+    // arithmetic operators
+    Plus,
+    Minus,
+    Star,
+    Slash,
+
+    // unary operators
+    Bang,
+
+    // relational operators
+    BangEqual,
+    Equal,
+    EqualEqual,
+    Greater,
+    GreaterEqual,
+    Less,
+    LessEqual,
+}
+
+impl From<&Token<'_>> for Option<OperatorToken> {
+    fn from(token: &Token<'_>) -> Self {
+        match token {
+            Token::Plus => Some(OperatorToken::Plus),
+            Token::Minus => Some(OperatorToken::Minus),
+            Token::Star => Some(OperatorToken::Star),
+            Token::Slash => Some(OperatorToken::Slash),
+            Token::Bang => Some(OperatorToken::Bang),
+            Token::BangEqual => Some(OperatorToken::BangEqual),
+            Token::Equal => Some(OperatorToken::Equal),
+            Token::EqualEqual => Some(OperatorToken::EqualEqual),
+            Token::Greater => Some(OperatorToken::Greater),
+            Token::GreaterEqual => Some(OperatorToken::GreaterEqual),
+            Token::Less => Some(OperatorToken::Less),
+            Token::LessEqual => Some(OperatorToken::LessEqual),
+            _ => None,
+        }
+    }
+}
+
+// TODO: single generic n-ary operator with `args: Vec<Expr>`
+#[derive(Debug)]
 pub struct Unary {
-    pub(crate) op: Token,
+    pub(crate) op: Operator,
     pub(crate) rhs: Box<Expr>,
 }
 
 #[derive(Debug)]
 pub struct Binary {
     pub(crate) lhs: Box<Expr>,
-    pub(crate) op: Token,
+    pub(crate) op: Operator,
     pub(crate) rhs: Box<Expr>,
 }
 
@@ -71,7 +131,7 @@ impl Expr {
     }
 
     #[inline]
-    pub fn unary(op: Token, rhs: Expr) -> Self {
+    pub fn unary(op: Operator, rhs: Expr) -> Self {
         Self::Unary(Unary {
             op,
             rhs: Box::new(rhs),
@@ -79,7 +139,7 @@ impl Expr {
     }
 
     #[inline]
-    pub fn binary(lhs: Expr, op: Token, rhs: Expr) -> Self {
+    pub fn binary(lhs: Expr, op: Operator, rhs: Expr) -> Self {
         Self::Binary(Binary {
             lhs: Box::new(lhs),
             op,
@@ -107,19 +167,27 @@ mod tests {
     fn pretty_print() {
         let expr = Expr::binary(
             Expr::unary(
-                Token {
-                    ty: TokenType::Minus,
-                    lexeme: "-".to_string(),
-                    literal: None,
-                    line: 1,
+                Operator {
+                    lexeme: String::from("-"),
+                    token: OperatorToken::Minus,
+                    span: Span {
+                        offset: 0,
+                        length: 1,
+                        lineno: 1,
+                        lineof: 0,
+                    },
                 },
                 Expr::Literal(Literal::Num(123.0)),
             ),
-            Token {
-                ty: TokenType::Star,
-                lexeme: "*".to_string(),
-                literal: None,
-                line: 1,
+            Operator {
+                lexeme: String::from("*"),
+                token: OperatorToken::Star,
+                span: Span {
+                    offset: 0,
+                    length: 1,
+                    lineno: 1,
+                    lineof: 7,
+                },
             },
             Expr::group(Expr::Literal(Literal::Num(45.67))),
         );

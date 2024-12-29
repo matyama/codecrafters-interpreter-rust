@@ -1,7 +1,9 @@
+mod error;
 mod expr;
 mod interpreter;
+mod lexer;
 mod parser;
-mod scanner;
+mod span;
 mod token;
 
 use std::env;
@@ -11,9 +13,9 @@ use std::path::Path;
 use std::process::{ExitCode, Termination};
 
 use interpreter::Interpret as _;
+use lexer::Lexer;
 use parser::Parser;
-use scanner::Scanner;
-use token::Token;
+use token::EOF;
 
 pub(crate) trait Report {
     fn report(&mut self, line: usize, location: &str, msg: impl Display);
@@ -22,18 +24,8 @@ pub(crate) trait Report {
 }
 
 pub(crate) enum Span<'a> {
-    Line(usize),
-    Token(&'a Token),
-}
-
-impl Span<'_> {
-    #[inline]
-    pub fn line(&self) -> usize {
-        match self {
-            Self::Line(line) => *line,
-            Self::Token(token) => token.line,
-        }
-    }
+    Eof(usize),
+    Token(&'a str, usize),
 }
 
 fn read_file_contents(file: impl AsRef<Path>) -> String {
@@ -59,16 +51,19 @@ fn main() -> impl Termination {
         "tokenize" => {
             let file_contents = read_file_contents(filename);
 
-            let scanner = Scanner::new(file_contents);
+            let mut exit_code = ExitCode::SUCCESS;
 
-            let (tokens, exit_code) = match scanner.tokenize() {
-                Ok(tokens) => (tokens, ExitCode::SUCCESS),
-                Err((tokens, error)) => (tokens, error.report()),
-            };
-
-            for token in tokens {
-                println!("{token}");
+            for token in Lexer::new(&file_contents) {
+                match token {
+                    Ok(token) => println!("{token}"),
+                    Err(error) => {
+                        eprintln!("{error}");
+                        exit_code = error.report();
+                    }
+                }
             }
+
+            println!("{EOF}");
 
             exit_code
         }
@@ -76,12 +71,24 @@ fn main() -> impl Termination {
         "parse" => {
             let file_contents = read_file_contents(filename);
 
-            let scanner = Scanner::new(file_contents);
+            // TODO: pass token stream directly into Parser and propagate errors
+            // (i.e., don't collect/iterate here)
+            let mut tokens = Vec::new();
+            let mut exit_code = None;
 
-            let tokens = match scanner.tokenize() {
-                Ok(tokens) => tokens,
-                Err((_, error)) => return error.report(),
-            };
+            for token in Lexer::new(&file_contents) {
+                match token {
+                    Ok(token) => tokens.push(token),
+                    Err(error) => {
+                        eprintln!("{error}");
+                        exit_code = Some(error.report());
+                    }
+                }
+            }
+
+            if let Some(exit_code) = exit_code {
+                return exit_code;
+            }
 
             let parser = Parser::new(tokens);
 
@@ -97,12 +104,22 @@ fn main() -> impl Termination {
         "evaluate" => {
             let file_contents = read_file_contents(filename);
 
-            let scanner = Scanner::new(file_contents);
+            let mut tokens = Vec::new();
+            let mut exit_code = None;
 
-            let tokens = match scanner.tokenize() {
-                Ok(tokens) => tokens,
-                Err((_, error)) => return error.report(),
-            };
+            for token in Lexer::new(&file_contents) {
+                match token {
+                    Ok(token) => tokens.push(token),
+                    Err(error) => {
+                        eprintln!("{error}");
+                        exit_code = Some(error.report());
+                    }
+                }
+            }
+
+            if let Some(exit_code) = exit_code {
+                return exit_code;
+            }
 
             let parser = Parser::new(tokens);
 

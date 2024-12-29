@@ -3,7 +3,6 @@ use std::fmt::Display;
 use std::process::{ExitCode, Termination};
 
 use crate::expr::{Binary, Expr, Grouping, Literal, Unary};
-use crate::token::{Token, TokenType};
 use crate::{Report, Span};
 
 #[derive(Debug)]
@@ -187,41 +186,55 @@ impl Interpret for Literal {
 
 impl Interpret for Unary {
     fn interpret(self) -> Result<Value, RuntimeError> {
+        use crate::expr::OperatorToken::*;
+
         let value = self.rhs.interpret()?;
 
-        match self.op.ty {
-            TokenType::Bang => Ok(Value::obj(!value.into_bool())),
+        match self.op.token {
+            Bang => Ok(Value::obj(!value.into_bool())),
 
-            TokenType::Minus => value
-                .map::<f64>(|v| *v = -*v)
-                .map_err(|_| RuntimeError::new(self.op, "Operand must be a number.")),
+            Minus => value.map::<f64>(|v| *v = -*v).map_err(|_| {
+                RuntimeError::new(
+                    &self.op.lexeme,
+                    self.op.span.lineno,
+                    "Operand must be a number.",
+                )
+            }),
 
-            ty => unreachable!("unary token type: {ty}"),
+            ty => unreachable!("unary token type: {ty:?}"),
         }
     }
 }
 
 impl Interpret for Binary {
     fn interpret(self) -> Result<Value, RuntimeError> {
+        use crate::expr::OperatorToken::*;
+
         let lhs = self.lhs.interpret()?;
         let rhs = self.rhs.interpret()?;
 
-        match self.op.ty {
-            TokenType::Minus => lhs
-                .combine::<f64, f64>(rhs, |x, y| x - y)
-                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
+        match self.op.token {
+            Minus => lhs.combine::<f64, f64>(rhs, |x, y| x - y).map_err(|_| {
+                RuntimeError::new(
+                    &self.op.lexeme,
+                    self.op.span.lineno,
+                    "Operands must be numbers.",
+                )
+            }),
 
-            TokenType::Plus => {
+            Plus => {
                 let Value::Object(Object(mut lhs)) = lhs else {
                     return Err(RuntimeError::new(
-                        self.op,
+                        &self.op.lexeme,
+                        self.op.span.lineno,
                         "Operands must be two numbers or two strings.",
                     ));
                 };
 
                 let Value::Object(Object(rhs)) = rhs else {
                     return Err(RuntimeError::new(
-                        self.op,
+                        &self.op.lexeme,
+                        self.op.span.lineno,
                         "Operands must be two numbers or two strings.",
                     ));
                 };
@@ -238,40 +251,65 @@ impl Interpret for Binary {
                         Ok(Value::Object(Object(lhs)))
                     }
                     _ => Err(RuntimeError::new(
-                        self.op,
+                        &self.op.lexeme,
+                        self.op.span.lineno,
                         "Operands must be two numbers or two strings.",
                     )),
                 }
             }
 
-            TokenType::Slash => lhs
-                .combine::<f64, f64>(rhs, |x, y| x / y)
-                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
+            Slash => lhs.combine::<f64, f64>(rhs, |x, y| x / y).map_err(|_| {
+                RuntimeError::new(
+                    &self.op.lexeme,
+                    self.op.span.lineno,
+                    "Operands must be numbers.",
+                )
+            }),
 
-            TokenType::Star => lhs
-                .combine::<f64, f64>(rhs, |x, y| x * y)
-                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
+            Star => lhs.combine::<f64, f64>(rhs, |x, y| x * y).map_err(|_| {
+                RuntimeError::new(
+                    &self.op.lexeme,
+                    self.op.span.lineno,
+                    "Operands must be numbers.",
+                )
+            }),
 
-            TokenType::Greater => lhs
-                .combine::<f64, bool>(rhs, |x, y| x > y)
-                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
+            Greater => lhs.combine::<f64, bool>(rhs, |x, y| x > y).map_err(|_| {
+                RuntimeError::new(
+                    &self.op.lexeme,
+                    self.op.span.lineno,
+                    "Operands must be numbers.",
+                )
+            }),
 
-            TokenType::GreaterEqual => lhs
-                .combine::<f64, bool>(rhs, |x, y| x >= y)
-                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
+            GreaterEqual => lhs.combine::<f64, bool>(rhs, |x, y| x >= y).map_err(|_| {
+                RuntimeError::new(
+                    &self.op.lexeme,
+                    self.op.span.lineno,
+                    "Operands must be numbers.",
+                )
+            }),
 
-            TokenType::Less => lhs
-                .combine::<f64, bool>(rhs, |x, y| x < y)
-                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
+            Less => lhs.combine::<f64, bool>(rhs, |x, y| x < y).map_err(|_| {
+                RuntimeError::new(
+                    &self.op.lexeme,
+                    self.op.span.lineno,
+                    "Operands must be numbers.",
+                )
+            }),
 
-            TokenType::LessEqual => lhs
-                .combine::<f64, bool>(rhs, |x, y| x <= y)
-                .map_err(|_| RuntimeError::new(self.op, "Operands must be numbers.")),
+            LessEqual => lhs.combine::<f64, bool>(rhs, |x, y| x <= y).map_err(|_| {
+                RuntimeError::new(
+                    &self.op.lexeme,
+                    self.op.span.lineno,
+                    "Operands must be numbers.",
+                )
+            }),
 
-            TokenType::BangEqual => Ok(Value::obj(lhs != rhs)),
-            TokenType::EqualEqual => Ok(Value::obj(lhs == rhs)),
+            BangEqual => Ok(Value::obj(lhs != rhs)),
+            EqualEqual => Ok(Value::obj(lhs == rhs)),
 
-            ty => unreachable!("binary token type: {ty}"),
+            ty => unreachable!("binary token type: {ty:?}"),
         }
     }
 }
@@ -281,8 +319,8 @@ pub struct RuntimeError;
 
 impl RuntimeError {
     #[inline]
-    pub fn new(token: Token, msg: impl Display) -> Self {
-        Self.error(Span::Token(&token), &msg);
+    pub fn new(token: &str, line: usize, msg: impl Display) -> Self {
+        Self.error(Span::Token(token, line), &msg);
         Self
     }
 }
@@ -295,8 +333,7 @@ impl Report for RuntimeError {
     #[inline]
     fn error(&mut self, span: Span<'_>, msg: impl Display) {
         match span {
-            Span::Line(line) => self.report(line, "", msg),
-            Span::Token(token) => self.report(token.line, "", msg),
+            Span::Eof(line) | Span::Token(_, line) => self.report(line, "", msg),
         }
     }
 }

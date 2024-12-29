@@ -1,64 +1,10 @@
-use std::collections::HashMap;
+use std::borrow::Cow;
 use std::fmt::Display;
-use std::sync::OnceLock;
 
-static KEYWORDS: OnceLock<HashMap<&str, TokenType>> = OnceLock::new();
+use crate::span::Span;
 
-fn init_keywords() -> HashMap<&'static str, TokenType> {
-    let mut keywords = HashMap::with_capacity(16);
-
-    keywords.insert("and", TokenType::And);
-    keywords.insert("class", TokenType::Class);
-    keywords.insert("else", TokenType::Else);
-    keywords.insert("false", TokenType::False);
-    keywords.insert("for", TokenType::For);
-    keywords.insert("fun", TokenType::Fun);
-    keywords.insert("if", TokenType::If);
-    keywords.insert("nil", TokenType::Nil);
-    keywords.insert("or", TokenType::Or);
-    keywords.insert("print", TokenType::Print);
-    keywords.insert("return", TokenType::Return);
-    keywords.insert("super", TokenType::Super);
-    keywords.insert("this", TokenType::This);
-    keywords.insert("true", TokenType::True);
-    keywords.insert("var", TokenType::Var);
-    keywords.insert("while", TokenType::While);
-
-    keywords
-}
-
-#[allow(clippy::upper_case_acronyms)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TokenType {
-    // Single character tokens
-    LeftParen,
-    RightParen,
-    LeftBrace,
-    RightBrace,
-    Comma,
-    Dot,
-    Minus,
-    Plus,
-    Semicolon,
-    Slash,
-    Star,
-
-    // One or two character tokens
-    Bang,
-    BangEqual,
-    Equal,
-    EqualEqual,
-    Greater,
-    GreaterEqual,
-    Less,
-    LessEqual,
-
-    // Literals
-    Identifier,
-    String,
-    Number,
-
-    // Keywords
+pub enum Keyword {
     And,
     Class,
     Else,
@@ -75,46 +21,48 @@ pub enum TokenType {
     True,
     Var,
     While,
-
-    // End Of File
-    EOF,
 }
 
-impl TokenType {
-    pub fn kw_or_ident(text: impl AsRef<str>) -> Self {
-        KEYWORDS
-            .get_or_init(init_keywords)
-            .get(text.as_ref())
-            .copied()
-            .unwrap_or(Self::Identifier)
+impl<'a> TryFrom<&'a str> for Keyword {
+    type Error = &'a str;
+
+    fn try_from(ident: &'a str) -> Result<Self, Self::Error> {
+        Ok(match ident {
+            "and" => Self::And,
+            "class" => Self::Class,
+            "else" => Self::Else,
+            "false" => Self::False,
+            "for" => Self::For,
+            "fun" => Self::Fun,
+            "if" => Self::If,
+            "nil" => Self::Nil,
+            "or" => Self::Or,
+            "print" => Self::Print,
+            "return" => Self::Return,
+            "super" => Self::Super,
+            "this" => Self::This,
+            "true" => Self::True,
+            "var" => Self::Var,
+            "while" => Self::While,
+            ident => return Err(ident),
+        })
     }
 }
 
-impl Display for TokenType {
+impl<'a> TryFrom<Cow<'a, str>> for Keyword {
+    type Error = Cow<'a, str>;
+
+    fn try_from(ident: Cow<'a, str>) -> Result<Self, Self::Error> {
+        match ident.as_ref().try_into() {
+            Ok(keyword) => Ok(keyword),
+            Err(_) => Err(ident),
+        }
+    }
+}
+
+impl Display for Keyword {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::LeftParen => write!(f, "LEFT_PAREN"),
-            Self::RightParen => write!(f, "RIGHT_PAREN"),
-            Self::LeftBrace => write!(f, "LEFT_BRACE"),
-            Self::RightBrace => write!(f, "RIGHT_BRACE"),
-            Self::Comma => write!(f, "COMMA"),
-            Self::Dot => write!(f, "DOT"),
-            Self::Minus => write!(f, "MINUS"),
-            Self::Plus => write!(f, "PLUS"),
-            Self::Semicolon => write!(f, "SEMICOLON"),
-            Self::Slash => write!(f, "SLASH"),
-            Self::Star => write!(f, "STAR"),
-            Self::Bang => write!(f, "BANG"),
-            Self::BangEqual => write!(f, "BANG_EQUAL"),
-            Self::Equal => write!(f, "EQUAL"),
-            Self::EqualEqual => write!(f, "EQUAL_EQUAL"),
-            Self::Greater => write!(f, "GREATER"),
-            Self::GreaterEqual => write!(f, "GREATER_EQUAL"),
-            Self::Less => write!(f, "LESS"),
-            Self::LessEqual => write!(f, "LESS_EQUAL"),
-            Self::Identifier => write!(f, "IDENTIFIER"),
-            Self::String => write!(f, "STRING"),
-            Self::Number => write!(f, "NUMBER"),
             Self::And => write!(f, "AND"),
             Self::Class => write!(f, "CLASS"),
             Self::Else => write!(f, "ELSE"),
@@ -131,20 +79,130 @@ impl Display for TokenType {
             Self::True => write!(f, "TRUE"),
             Self::Var => write!(f, "VAR"),
             Self::While => write!(f, "WHILE"),
-            Self::EOF => write!(f, "EOF"),
         }
     }
 }
 
-#[derive(Clone, Debug)]
-pub enum Literal {
-    Str(String),
+#[derive(Debug, PartialEq)]
+pub struct LexToken<'prg> {
+    /// Raw input slice
+    pub lexeme: Cow<'prg, str>,
+
+    /// Token corresponding to the lexeme
+    pub token: Token<'prg>,
+
+    /// Span of this token in the input
+    pub span: Span,
+}
+
+impl Display for LexToken<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let token_type = self.token.type_fmt();
+
+        match self.token {
+            Token::Literal(ref literal @ (Literal::Str(_) | Literal::Num(_))) => {
+                write!(f, "{} {} {}", token_type, self.lexeme, literal)
+            }
+            _ => write!(f, "{} {} null", token_type, self.lexeme),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Token<'a> {
+    // Single character tokens
+
+    // basic punctuation symbols
+    Dot,
+    Comma,
+    Semicolon,
+
+    // parenthesis & brackets
+    LeftParen,
+    RightParen,
+    LeftBrace,
+    RightBrace,
+
+    // arithmetic operators
+    Plus,
+    Minus,
+    Star,
+    Slash,
+
+    // unary operators
+    Bang,
+
+    // relational operators
+    BangEqual,
+    Equal,
+    EqualEqual,
+    Greater,
+    GreaterEqual,
+    Less,
+    LessEqual,
+
+    /// Literal values (identifiers, strings, numbers)
+    Literal(Literal<'a>),
+
+    /// Language keywords
+    Keyword(Keyword),
+}
+
+impl Token<'_> {
+    #[inline]
+    fn type_fmt(&self) -> TokenTypeFmt<'_> {
+        TokenTypeFmt(self)
+    }
+}
+
+#[repr(transparent)]
+struct TokenTypeFmt<'a>(&'a Token<'a>);
+
+impl Display for TokenTypeFmt<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Token::Dot => write!(f, "DOT"),
+            Token::Comma => write!(f, "COMMA"),
+            Token::Semicolon => write!(f, "SEMICOLON"),
+            Token::LeftParen => write!(f, "LEFT_PAREN"),
+            Token::RightParen => write!(f, "RIGHT_PAREN"),
+            Token::LeftBrace => write!(f, "LEFT_BRACE"),
+            Token::RightBrace => write!(f, "RIGHT_BRACE"),
+            Token::Plus => write!(f, "PLUS"),
+            Token::Minus => write!(f, "MINUS"),
+            Token::Star => write!(f, "STAR"),
+            Token::Slash => write!(f, "SLASH"),
+            Token::Bang => write!(f, "BANG"),
+            Token::BangEqual => write!(f, "BANG_EQUAL"),
+            Token::Equal => write!(f, "EQUAL"),
+            Token::EqualEqual => write!(f, "EQUAL_EQUAL"),
+            Token::Greater => write!(f, "GREATER"),
+            Token::GreaterEqual => write!(f, "GREATER_EQUAL"),
+            Token::Less => write!(f, "LESS"),
+            Token::LessEqual => write!(f, "LESS_EQUAL"),
+            Token::Literal(Literal::Ident(_)) => write!(f, "IDENTIFIER"),
+            Token::Literal(Literal::Str(_)) => write!(f, "STRING"),
+            Token::Literal(Literal::Num(_)) => write!(f, "NUMBER"),
+            Token::Keyword(keyword) => write!(f, "{keyword}"),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Literal<'a> {
+    /// Name (alphabetical) of either a register or label
+    Ident(Cow<'a, str>),
+    /// String values with lexeme of the form `"some text"`
+    Str(Cow<'a, str>),
+    /// Integral numeric values
     Num(f64),
 }
 
-impl Display for Literal {
+impl Display for Literal<'_> {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Ident(s) => f.write_str(s),
             Self::Str(s) => write!(f, "{s}"),
             Self::Num(n) if n.fract() > 0.0 => write!(f, "{n}"),
             Self::Num(n) => write!(f, "{n:.1}"),
@@ -152,34 +210,13 @@ impl Display for Literal {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct Token {
-    pub(crate) ty: TokenType,
-    pub(crate) lexeme: String,
-    pub(crate) literal: Option<Literal>,
-    pub(crate) line: usize,
-}
+/// Dummy End Of File Token
+#[allow(clippy::upper_case_acronyms)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EOF;
 
-impl Token {
-    #[inline]
-    pub fn eof(line: usize) -> Self {
-        Token {
-            ty: TokenType::EOF,
-            lexeme: String::new(),
-            literal: None,
-            line,
-        }
-    }
-}
-
-impl Display for Token {
+impl std::fmt::Display for EOF {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(ref literal) = self.literal {
-            write!(f, "{} {} {}", self.ty, self.lexeme, literal)
-        } else {
-            write!(f, "{} {} null", self.ty, self.lexeme)
-        }
+        write!(f, "EOF  null")
     }
 }
-
-pub type Tokens = Vec<Token>;
