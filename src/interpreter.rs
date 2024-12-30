@@ -1,9 +1,8 @@
 use std::any::Any;
 use std::fmt::Display;
-use std::process::{ExitCode, Termination};
 
+use crate::error::{IntoRuntimeError as _, RuntimeError};
 use crate::expr::{Atom, Cons, Expr, Literal, Operator};
-use crate::Report;
 
 #[derive(Debug)]
 #[repr(transparent)]
@@ -184,8 +183,6 @@ impl Interpret for Literal {
 
 impl Interpret for Cons {
     fn interpret(mut self) -> Result<Value, RuntimeError> {
-        let runtime_err = |msg| RuntimeError::new(self.op, self.span.lineno, msg);
-
         let binary_args = |mut args: Vec<Expr>| match (args.pop(), args.pop()) {
             (Some(rhs), Some(lhs)) => Some((lhs, rhs)),
             _ => None,
@@ -197,20 +194,26 @@ impl Interpret for Cons {
                     let value = rhs.interpret()?;
                     Ok(Value::obj(!value.into_bool()))
                 }
-                None => Err(runtime_err("Operand must be an expression.")),
+                None => Err(self.span.into_error("Operand must be an expression.")),
             },
 
             Operator::Plus => {
                 let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(runtime_err("Operands must be two numbers or two strings."));
+                    return Err(self
+                        .span
+                        .into_error("Operands must be two numbers or two strings."));
                 };
 
                 let Value::Object(Object(mut lhs)) = lhs.interpret()? else {
-                    return Err(runtime_err("Operands must be two numbers or two strings."));
+                    return Err(self
+                        .span
+                        .into_error("Operands must be two numbers or two strings."));
                 };
 
                 let Value::Object(Object(rhs)) = rhs.interpret()? else {
-                    return Err(runtime_err("Operands must be two numbers or two strings."));
+                    return Err(self
+                        .span
+                        .into_error("Operands must be two numbers or two strings."));
                 };
 
                 if let (Some(lhs), Some(rhs)) =
@@ -224,7 +227,9 @@ impl Interpret for Cons {
                         left.push_str(right);
                         Ok(Value::Object(Object(lhs)))
                     }
-                    _ => Err(runtime_err("Operands must be two numbers or two strings.")),
+                    _ => Err(self
+                        .span
+                        .into_error("Operands must be two numbers or two strings.")),
                 }
             }
 
@@ -232,93 +237,95 @@ impl Interpret for Cons {
                 (Some(rhs), None) => {
                     let rhs = rhs.interpret()?;
                     rhs.map::<f64>(|v| *v = -*v)
-                        .map_err(|_| runtime_err("Operand must be a number."))
+                        .map_err(|_| self.span.into_error("Operand must be a number."))
                 }
                 (Some(rhs), Some(lhs)) => {
                     let lhs = lhs.interpret()?;
                     let rhs = rhs.interpret()?;
 
                     lhs.combine::<f64, f64>(rhs, |x, y| x - y)
-                        .map_err(|_| runtime_err("Operands must be numbers."))
+                        .map_err(|_| self.span.into_error("Operands must be numbers."))
                 }
-                _ => Err(runtime_err("Operands must be two numbers or two strings.")),
+                _ => Err(self
+                    .span
+                    .into_error("Operands must be two numbers or two strings.")),
             },
 
             Operator::Slash => {
                 let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(runtime_err("Operands must be numbers."));
+                    return Err(self.span.into_error("Operands must be numbers."));
                 };
 
                 let lhs = lhs.interpret()?;
                 let rhs = rhs.interpret()?;
 
                 lhs.combine::<f64, f64>(rhs, |x, y| x / y)
-                    .map_err(|_| runtime_err("Operands must be numbers."))
+                    .map_err(|_| self.span.into_error("Operands must be numbers."))
             }
 
             Operator::Star => {
                 let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(runtime_err("Operands must be numbers."));
+                    return Err(self.span.into_error("Operands must be numbers."));
                 };
 
                 let lhs = lhs.interpret()?;
                 let rhs = rhs.interpret()?;
 
                 lhs.combine::<f64, f64>(rhs, |x, y| x * y)
-                    .map_err(|_| runtime_err("Operands must be numbers."))
+                    .map_err(|_| self.span.into_error("Operands must be numbers."))
             }
 
             Operator::Greater => {
                 let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(runtime_err("Operands must be numbers."));
+                    return Err(self.span.into_error("Operands must be numbers."));
                 };
 
                 let lhs = lhs.interpret()?;
                 let rhs = rhs.interpret()?;
 
                 lhs.combine::<f64, bool>(rhs, |x, y| x > y)
-                    .map_err(|_| runtime_err("Operands must be numbers."))
+                    .map_err(|_| self.span.into_error("Operands must be numbers."))
             }
 
             Operator::GreaterEqual => {
                 let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(runtime_err("Operands must be numbers."));
+                    return Err(self.span.into_error("Operands must be numbers."));
                 };
 
                 let lhs = lhs.interpret()?;
                 let rhs = rhs.interpret()?;
 
                 lhs.combine::<f64, bool>(rhs, |x, y| x >= y)
-                    .map_err(|_| runtime_err("Operands must be numbers."))
+                    .map_err(|_| self.span.into_error("Operands must be numbers."))
             }
 
             Operator::Less => {
                 let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(runtime_err("Operands must be numbers."));
+                    return Err(self.span.into_error("Operands must be numbers."));
                 };
 
                 let lhs = lhs.interpret()?;
                 let rhs = rhs.interpret()?;
 
                 lhs.combine::<f64, bool>(rhs, |x, y| x < y)
-                    .map_err(|_| runtime_err("Operands must be numbers."))
+                    .map_err(|_| self.span.into_error("Operands must be numbers."))
             }
 
             Operator::LessEqual => {
                 let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(runtime_err("Operands must be numbers."));
+                    return Err(self.span.into_error("Operands must be numbers."));
                 };
 
                 let lhs = lhs.interpret()?;
                 let rhs = rhs.interpret()?;
 
                 lhs.combine::<f64, bool>(rhs, |x, y| x <= y)
-                    .map_err(|_| runtime_err("Operands must be numbers."))
+                    .map_err(|_| self.span.into_error("Operands must be numbers."))
             }
 
             Operator::BangEqual => {
                 let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(runtime_err("Operands must be numbers."));
+                    return Err(self.span.into_error("Operands must be numbers."));
                 };
 
                 let lhs = lhs.interpret()?;
@@ -329,7 +336,7 @@ impl Interpret for Cons {
 
             Operator::EqualEqual => {
                 let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(runtime_err("Operands must be numbers."));
+                    return Err(self.span.into_error("Operands must be numbers."));
                 };
 
                 let lhs = lhs.interpret()?;
@@ -340,39 +347,10 @@ impl Interpret for Cons {
 
             Operator::LeftParen => match self.args.pop() {
                 Some(expr) => expr.interpret(),
-                None => Err(runtime_err("Operand must be an expression.")),
+                None => Err(self.span.into_error("Operand must be an expression.")),
             },
 
             op => unimplemented!("interpret {op:?}"),
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct RuntimeError;
-
-impl RuntimeError {
-    #[inline]
-    pub fn new(token: impl Display, line: usize, msg: impl Display) -> Self {
-        Self.error(token, line, &msg);
-        Self
-    }
-}
-
-impl Report for RuntimeError {
-    fn report(&mut self, line: usize, _location: &str, msg: impl Display) {
-        eprintln!("{msg}\n[line {line}]");
-    }
-
-    #[inline]
-    fn error(&mut self, _: impl Display, line: usize, msg: impl Display) {
-        self.report(line, "", msg)
-    }
-}
-
-impl Termination for RuntimeError {
-    #[inline]
-    fn report(self) -> ExitCode {
-        ExitCode::from(70)
     }
 }

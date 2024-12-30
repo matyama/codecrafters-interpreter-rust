@@ -7,7 +7,6 @@ mod span;
 mod token;
 
 use std::env;
-use std::fmt::Display;
 use std::fs;
 use std::path::Path;
 use std::process::{ExitCode, Termination};
@@ -15,12 +14,6 @@ use std::process::{ExitCode, Termination};
 use interpreter::Interpret as _;
 use lexer::Lexer;
 use token::EOF;
-
-pub(crate) trait Report {
-    fn report(&mut self, line: usize, location: &str, msg: impl Display);
-
-    fn error(&mut self, tokne: impl Display, line: usize, msg: impl Display);
-}
 
 fn read_file_contents(file: impl AsRef<Path>) -> String {
     let file = file.as_ref();
@@ -90,7 +83,10 @@ fn main() -> impl Termination {
                     println!("{value}");
                     ExitCode::SUCCESS
                 }
-                Err(error) => error.report(),
+                Err(error) => {
+                    eprintln!("{error}");
+                    error.report()
+                }
             }
         }
 

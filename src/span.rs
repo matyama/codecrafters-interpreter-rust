@@ -1,6 +1,8 @@
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, Deref};
 
+use crate::error::{IntoRuntimeError, RuntimeError};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span {
     /// Offset where the span starts
@@ -112,6 +114,16 @@ impl<S: Deref<Target = Span>> AddAssign<S> for Span {
         debug_assert!(self.end() <= other.offset);
         debug_assert!(self.lineno <= other.lineno);
         self.length += (other.offset - self.end()) + other.length;
+    }
+}
+
+impl IntoRuntimeError for Span {
+    #[inline]
+    fn into_error(self, msg: impl Display) -> RuntimeError {
+        RuntimeError {
+            span: self,
+            source: msg.to_string().into(),
+        }
     }
 }
 

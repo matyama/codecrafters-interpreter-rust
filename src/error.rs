@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::process::{ExitCode, Termination};
 
 use crate::span::Span;
@@ -33,7 +33,29 @@ impl Termination for SyntaxError {
     }
 }
 
-// TODO: RuntimeError
+#[derive(thiserror::Error)]
+#[error("{source}\n[line {}]", span.lineno)]
+pub struct RuntimeError {
+    pub span: Span,
+    pub source: Box<dyn std::error::Error + 'static>,
+}
+
+impl Debug for RuntimeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}] RuntimeError: {}", self.span.loc(), self.source)
+    }
+}
+
+impl Termination for RuntimeError {
+    #[inline]
+    fn report(self) -> ExitCode {
+        ExitCode::from(70)
+    }
+}
+
+pub(crate) trait IntoRuntimeError {
+    fn into_error(self, msg: impl Display) -> RuntimeError;
+}
 
 #[cfg(test)]
 mod tests {
@@ -54,6 +76,21 @@ mod tests {
         };
 
         let expected = "[line 1] Error at 'IDENTIFIER & null': Unexpected character: &";
+        assert_eq!(expected.to_string(), error.to_string());
+    }
+
+    #[test]
+    fn display_runtime_error() {
+        let span = Span {
+            offset: 25,
+            length: 10,
+            lineno: 1,
+            lineof: 25,
+        };
+
+        let error = span.into_error("Operands must be numbers.");
+
+        let expected = "Operands must be numbers.\n[line 1]";
         assert_eq!(expected.to_string(), error.to_string());
     }
 }
