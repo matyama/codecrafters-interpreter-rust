@@ -54,14 +54,15 @@ impl TokenStream<'_> {
     fn error(
         &self,
         start: usize,
-        reason: impl Into<Box<dyn std::error::Error + 'static>>,
+        source: impl Into<Box<dyn std::error::Error + 'static>>,
     ) -> SyntaxError {
         let span = self.span(start, self.pos - start);
+        let code = span.snippet(self.prg).to_string();
         SyntaxError {
-            error: Cow::Borrowed(""),
-            code: span.snippet(self.prg).to_string(),
             span,
-            source: reason.into(),
+            code,
+            context: Cow::Borrowed(""),
+            source: source.into(),
         }
     }
 

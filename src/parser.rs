@@ -3,9 +3,25 @@ use std::iter::Peekable;
 
 use crate::error::SyntaxError;
 use crate::expr::{Atom, Expr, Operator};
-use crate::lexer::TokenStream;
+use crate::lexer::{Lexer, TokenStream};
 use crate::span::Span;
 use crate::token::{LexToken, Literal, Token};
+
+/// Parse a sequence of tokens according to the following grammar:
+/// ```
+/// expression     → equality ;
+/// equality       → comparison ( ( "!=" | "==" ) comparison )* ;
+/// comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
+/// term           → factor ( ( "-" | "+" ) factor )* ;
+/// factor         → unary ( ( "/" | "*" ) unary )* ;
+/// unary          → ( "!" | "-" ) unary
+///                | primary ;
+/// primary        → NUMBER | STRING | "true" | "false" | "nil"
+///                | "(" expression ")" ;
+/// ```
+pub fn parse(source: &str) -> Result<Expr, SyntaxError> {
+    Parser::new(source).parse()
+}
 
 macro_rules! rule {
 
@@ -44,12 +60,9 @@ macro_rules! rule {
                     let mut span = op.span.clone();
 
                     let Some(op) = <Option<Operator>>::from(&op.token) else {
-                        return Err(SyntaxError {
-                            error: Cow::Owned(format!(" at '{}'", op.lexeme)),
-                            code: span.snippet(&self.source).to_string(),
-                            span,
-                            source: "Expect operator token.".into(),
-                        });
+                        let loc = ErrLoc::at(&op.lexeme);
+                        let msg = "Expect operator token.";
+                        return Err(self.error(span, msg, loc));
                     };
 
                     let rhs = self.$rhs()?;
@@ -80,12 +93,9 @@ macro_rules! rule {
                     };
                     let mut span = op.span.clone();
                     let Some(op) = <Option<Operator>>::from(&op.token) else {
-                        return Err(SyntaxError {
-                            error: Cow::Owned(format!(" at '{}'", op.lexeme)),
-                            code: span.snippet(&self.source).to_string(),
-                            span,
-                            source: "Expect operator token.".into(),
-                        });
+                        let loc = ErrLoc::at(&op.lexeme);
+                        let msg = "Expect operator token.";
+                        return Err(self.error(span, msg, loc));
                     };
                     let rhs = self.$rhs()?;
                     span += rhs.span();
@@ -158,56 +168,37 @@ macro_rules! rule {
                         }
 
                         Ok(LexToken { lexeme, span, .. }) => {
-                            let error = Cow::Owned(format!(" at '{lexeme}'"));
                             let span = span.clone();
-                            let code = span.snippet(&self.source).to_string();
-                            Err(SyntaxError {
-                                error,
-                                code,
-                                span,
-                                source: "Expect ')' after expression.".into(),
-                            })
+                            let loc = ErrLoc::at(lexeme);
+                            let msg = "Expect ')' after expression.";
+                            Err(self.error(span, msg, loc))
                         },
 
                         Err(span) => {
-                            let code = span.snippet(&self.source).to_string();
-                            Err(SyntaxError {
-                                error: Cow::Borrowed(" at end"),
-                                code,
-                                span,
-                                source: "Expect ')' after expression.".into(),
-                            })
-                        }
+                            let msg = "Expect ')' after expression.";
+                            Err(self.error(span, msg, ErrLoc::Eof))
+                        },
                     }
                 }
 
                 Ok(LexToken { lexeme, span, .. }) => {
-                    let error = Cow::Owned(format!(" at '{lexeme}'"));
                     let span = span.clone();
-                    let code = span.snippet(&self.source).to_string();
-                    Err(SyntaxError {
-                        error,
-                        code,
-                        span,
-                        source: "Expect expression.".into(),
-                    })
+                    let loc = ErrLoc::at(lexeme);
+                    Err(self.error(span, "Expect expression.", loc))
                 },
 
                 Err(span) => {
-                    let code = span.snippet(&self.source).to_string();
-                    Err(SyntaxError {
-                        error: Cow::Borrowed(" at end"),
-                        code,
-                        span,
-                        source: "Expect expression.".into(),
-                    })
-                }
+                    Err(self.error(span, "Expect expression.", ErrLoc::Eof))
+                },
             }
         }
     }
 
 }
 
+// NOTE: Unfortunately one cannot access the iterator inside Peekable, so
+// this has to be instantiated with and hold the input slice. Ideally,
+// `Parser::new` would take `tokens: TokenStream<'a>`.
 /// Recursive descent parser for the Lox language
 pub struct Parser<'a> {
     source: &'a str,
@@ -216,13 +207,22 @@ pub struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    // TODO: take the source ref from the tokens
     #[inline]
-    pub fn new(source: &'a str, tokens: TokenStream<'a>) -> Self {
+    pub fn new(source: &'a str) -> Self {
         Self {
             source,
-            tokens: tokens.peekable(),
+            tokens: Lexer::new(source).into_iter().peekable(),
             current: None,
+        }
+    }
+
+    fn error(&self, span: Span, msg: &str, loc: ErrLoc) -> SyntaxError {
+        let code = span.snippet(self.source).to_string();
+        SyntaxError {
+            span,
+            code,
+            context: loc.into(),
+            source: msg.into(),
         }
     }
 
@@ -249,18 +249,6 @@ impl<'a> Parser<'a> {
         })
     }
 
-    /// Parse a sequence of tokens according to the following grammar:
-    /// ```
-    /// expression     → equality ;
-    /// equality       → comparison ( ( "!=" | "==" ) comparison )* ;
-    /// comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
-    /// term           → factor ( ( "-" | "+" ) factor )* ;
-    /// factor         → unary ( ( "/" | "*" ) unary )* ;
-    /// unary          → ( "!" | "-" ) unary
-    ///                | primary ;
-    /// primary        → NUMBER | STRING | "true" | "false" | "nil"
-    ///                | "(" expression ")" ;
-    /// ```
     #[inline]
     pub fn parse(mut self) -> Result<Expr, SyntaxError> {
         self.expression()
@@ -283,5 +271,29 @@ impl<'a> Parser<'a> {
 
     rule! {
         primary    -> Num | Str | "true" | "false" | "nil" | ( expression ) ;
+    }
+}
+
+#[derive(Debug, Default)]
+enum ErrLoc {
+    At(Cow<'static, str>),
+    #[default]
+    Eof,
+}
+
+impl ErrLoc {
+    #[inline]
+    fn at(loc: &str) -> Self {
+        Self::At(Cow::Owned(format!(" at '{loc}'")))
+    }
+}
+
+impl From<ErrLoc> for Cow<'static, str> {
+    #[inline]
+    fn from(loc: ErrLoc) -> Self {
+        match loc {
+            ErrLoc::At(loc) => loc,
+            ErrLoc::Eof => Cow::Borrowed(" at end"),
+        }
     }
 }

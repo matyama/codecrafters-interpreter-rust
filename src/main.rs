@@ -14,7 +14,6 @@ use std::process::{ExitCode, Termination};
 
 use interpreter::Interpret as _;
 use lexer::Lexer;
-use parser::Parser;
 use token::EOF;
 
 pub(crate) trait Report {
@@ -66,10 +65,7 @@ fn main() -> impl Termination {
         "parse" => {
             let source = read_file_contents(filename);
 
-            let lexer = Lexer::new(&source);
-            let parser = Parser::new(&source, lexer.into_iter());
-
-            match parser.parse() {
+            match parser::parse(&source) {
                 Ok(expr) => {
                     println!("{expr}");
                     ExitCode::SUCCESS
@@ -84,10 +80,7 @@ fn main() -> impl Termination {
         "evaluate" => {
             let source = read_file_contents(filename);
 
-            let lexer = Lexer::new(&source);
-            let parser = Parser::new(&source, lexer.into_iter());
-
-            let expr = match parser.parse() {
+            let expr = match parser::parse(&source) {
                 Ok(expr) => expr,
                 Err(error) => return error.report(),
             };

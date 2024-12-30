@@ -5,11 +5,11 @@ use std::process::{ExitCode, Termination};
 use crate::span::Span;
 
 #[derive(thiserror::Error)]
-#[error("[line {}] Error{error}: {source}", span.lineno)]
+#[error("[line {}] Error{context}: {source}", span.lineno)]
 pub struct SyntaxError {
-    pub error: Cow<'static, str>,
-    pub code: String,
     pub span: Span,
+    pub code: String,
+    pub context: Cow<'static, str>,
     pub source: Box<dyn std::error::Error + 'static>,
 }
 
@@ -19,7 +19,7 @@ impl Debug for SyntaxError {
             f,
             "[{}] SyntaxError{}: {} ('{}')",
             self.span.loc(),
-            self.error,
+            self.context,
             self.source,
             self.code,
         )
@@ -42,14 +42,14 @@ mod tests {
     #[test]
     fn display_syntax_error() {
         let error = SyntaxError {
-            error: " at 'IDENTIFIER & null'".into(),
-            code: r#"var result = (a + b) > 7 && "Success" != "Failure" or x >= 5"#.to_string(),
             span: Span {
                 offset: 25,
                 length: 1,
                 lineno: 1,
                 lineof: 25,
             },
+            code: r#"var result = (a + b) > 7 && "Success" != "Failure" or x >= 5"#.to_string(),
+            context: " at 'IDENTIFIER & null'".into(),
             source: "Unexpected character: &".to_string().into(),
         };
 
