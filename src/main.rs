@@ -20,12 +20,7 @@ use token::EOF;
 pub(crate) trait Report {
     fn report(&mut self, line: usize, location: &str, msg: impl Display);
 
-    fn error<T: Display, M: Display>(&mut self, span: Span<T>, msg: M);
-}
-
-pub(crate) enum Span<T> {
-    Eof(usize),
-    Token(T, usize),
+    fn error(&mut self, tokne: impl Display, line: usize, msg: impl Display);
 }
 
 fn read_file_contents(file: impl AsRef<Path>) -> String {
@@ -49,11 +44,11 @@ fn main() -> impl Termination {
 
     match command.as_str() {
         "tokenize" => {
-            let file_contents = read_file_contents(filename);
+            let source = read_file_contents(filename);
 
             let mut exit_code = ExitCode::SUCCESS;
 
-            for token in Lexer::new(&file_contents) {
+            for token in Lexer::new(&source) {
                 match token {
                     Ok(token) => println!("{token}"),
                     Err(error) => {
@@ -69,59 +64,28 @@ fn main() -> impl Termination {
         }
 
         "parse" => {
-            let file_contents = read_file_contents(filename);
+            let source = read_file_contents(filename);
 
-            // TODO: pass token stream directly into Parser and propagate errors
-            // (i.e., don't collect/iterate here)
-            let mut tokens = Vec::new();
-            let mut exit_code = None;
-
-            for token in Lexer::new(&file_contents) {
-                match token {
-                    Ok(token) => tokens.push(token),
-                    Err(error) => {
-                        eprintln!("{error}");
-                        exit_code = Some(error.report());
-                    }
-                }
-            }
-
-            if let Some(exit_code) = exit_code {
-                return exit_code;
-            }
-
-            let parser = Parser::new(tokens);
+            let lexer = Lexer::new(&source);
+            let parser = Parser::new(&source, lexer.into_iter());
 
             match parser.parse() {
                 Ok(expr) => {
                     println!("{expr}");
                     ExitCode::SUCCESS
                 }
-                Err(error) => error.report(),
+                Err(error) => {
+                    eprintln!("{error}");
+                    error.report()
+                }
             }
         }
 
         "evaluate" => {
-            let file_contents = read_file_contents(filename);
+            let source = read_file_contents(filename);
 
-            let mut tokens = Vec::new();
-            let mut exit_code = None;
-
-            for token in Lexer::new(&file_contents) {
-                match token {
-                    Ok(token) => tokens.push(token),
-                    Err(error) => {
-                        eprintln!("{error}");
-                        exit_code = Some(error.report());
-                    }
-                }
-            }
-
-            if let Some(exit_code) = exit_code {
-                return exit_code;
-            }
-
-            let parser = Parser::new(tokens);
+            let lexer = Lexer::new(&source);
+            let parser = Parser::new(&source, lexer.into_iter());
 
             let expr = match parser.parse() {
                 Ok(expr) => expr,

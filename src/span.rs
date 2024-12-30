@@ -16,6 +16,15 @@ pub struct Span {
 impl Span {
     pub const SNIPPET_LIMIT: usize = 60;
 
+    pub(crate) const fn empty() -> Self {
+        Self {
+            offset: 0,
+            length: 0,
+            lineno: 0,
+            lineof: 0,
+        }
+    }
+
     /// ```
     /// # use codcrafters_interpreter_rust::span::Span;
     /// let s = Span { offset: 2, length: 6, lineno: 0, lineof: 10 };

@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::process::{ExitCode, Termination};
 
 use crate::expr::{Atom, Cons, Expr, Literal, Operator};
-use crate::{Report, Span};
+use crate::Report;
 
 #[derive(Debug)]
 #[repr(transparent)]
@@ -354,7 +354,7 @@ pub struct RuntimeError;
 impl RuntimeError {
     #[inline]
     pub fn new(token: impl Display, line: usize, msg: impl Display) -> Self {
-        Self.error(Span::Token(token, line), &msg);
+        Self.error(token, line, &msg);
         Self
     }
 }
@@ -365,10 +365,8 @@ impl Report for RuntimeError {
     }
 
     #[inline]
-    fn error<T: Display, M: Display>(&mut self, span: Span<T>, msg: M) {
-        match span {
-            Span::Eof(line) | Span::Token(_, line) => self.report(line, "", msg),
-        }
+    fn error(&mut self, _: impl Display, line: usize, msg: impl Display) {
+        self.report(line, "", msg)
     }
 }
 
