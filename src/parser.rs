@@ -2,8 +2,8 @@ use std::fmt::Display;
 use std::iter::Peekable;
 use std::process::{ExitCode, Termination};
 
-use crate::expr::{Expr, Literal, Operator};
-use crate::token::{LexToken, Token};
+use crate::expr::{Atom, Expr, Operator};
+use crate::token::{LexToken, Literal, Token};
 use crate::{Report, Span};
 
 macro_rules! rule {
@@ -21,14 +21,21 @@ macro_rules! rule {
             fn $head(&mut self) -> Result<Expr, ParseError> {
                 let mut expr = self.$lhs()?;
 
-                while let Ok(LexToken { token: Token::$ty0 $(| Token::$ty)*, .. }) = self.peek() {
+                while let Ok(LexToken {
+                    token: Token::$ty0 $(| Token::$ty)*,
+                    ..
+                }) = self.peek() {
                     let Ok(op) = self.advance() else {
                         unreachable!("peeked next token");
                     };
-                    let op = Into::<Option<Operator>>::into(op)
-                        .ok_or_else(|| ParseError::new(Ok(op), "Expect operator token."))?;
+                    let mut span = op.span.clone();
+                    let op = <Option<Operator>>::from(&op.token)
+                        .ok_or_else(|| {
+                            ParseError::new(Ok(op), "Expect operator token.")
+                        })?;
                     let rhs = self.$rhs()?;
-                    expr = Expr::binary(expr, op, rhs);
+                    span += rhs.span();
+                    expr = Expr::binary(op, expr, rhs, span);
                 }
 
                 Ok(expr)
@@ -40,14 +47,21 @@ macro_rules! rule {
     ($($head:ident -> ($ty0:ident $(| $ty:ident)*) $rhs:ident | $primary:ident ;)+) => {
         $(
             fn $head(&mut self) -> Result<Expr, ParseError> {
-                if let Ok(LexToken { token: Token::$ty0 $(| Token::$ty)*, .. }) = self.peek() {
+                if let Ok(LexToken {
+                    token: Token::$ty0 $(| Token::$ty)*,
+                    ..
+                }) = self.peek() {
                     let Ok(op) = self.advance() else {
                         unreachable!("peeked next token");
                     };
-                    let op = Into::<Option<Operator>>::into(op)
-                        .ok_or_else(|| ParseError::new(Ok(op), "Expect operator token."))?;
+                    let mut span = op.span.clone();
+                    let op = <Option<Operator>>::from(&op.token)
+                        .ok_or_else(|| {
+                            ParseError::new(Ok(op), "Expect operator token.")
+                        })?;
                     let rhs = self.$rhs()?;
-                    Ok(Expr::unary(op, rhs))
+                    span += rhs.span();
+                    Ok(Expr::unary(op, rhs, span))
                 } else {
                     self.$primary()
                 }
@@ -58,33 +72,46 @@ macro_rules! rule {
     // models: primary → NUMBER | STRING | "true" | "false" | "nil" | "(" expression ")" ;
     ($head:ident -> $ty0:ident $(| $ty:ident)* | "true" | "false" | "nil" | ( $group:ident ) ;) => {
         fn $head(&mut self) -> Result<Expr, ParseError> {
-            use crate::token::{ Keyword::*, Literal as Lit };
+            use crate::token::Keyword::*;
             match self.peek() {
                 Ok(
                     token @ LexToken {
-                        token: Token::Literal(Lit::$ty0(..) $(| Lit::$ty(..))*),
+                        token: Token::Literal(
+                           Literal::$ty0(..) $(| Literal::$ty(..))*
+                        ),
                         ..
                     }
                 ) => {
-                    let lit = Literal::from(token);
+                    let atom = Atom::from(token);
                     let _ = self.advance();
-                    Ok(Expr::Literal(lit))
+                    Ok(Expr::Atom(atom))
                 }
 
-                Ok(token @ LexToken { token: Token::Keyword(True | False | Nil), .. }) => {
-                    let lit = Literal::from(token);
+                Ok(token @ LexToken {
+                    token: Token::Keyword(True | False | Nil),
+                    ..
+                }) => {
+                    let atom = Atom::from(token);
                     let _ = self.advance();
-                    Ok(Expr::Literal(lit))
+                    Ok(Expr::Atom(atom))
                 }
 
-                Ok(LexToken { token: Token::LeftParen, .. }) => {
+                Ok(LexToken { token: Token::LeftParen, span, .. }) => {
+                    let mut span = span.clone();
                     let _ = self.advance();
+
                     let expr = self.$group()?;
+                    span += expr.span();
 
                     match self.peek() {
-                        Ok(LexToken { token: Token::RightParen, .. }) => {
+                        Ok(LexToken {
+                            token: Token::RightParen,
+                            span: ref s,
+                            ..
+                        }) => {
+                            span += s;
                             let _ = self.advance();
-                            Ok(Expr::group(expr))
+                            Ok(Expr::group(expr, span))
                         }
                         token => Err(ParseError::new(token, "Expect ')' after expression.")),
                     }
@@ -186,7 +213,7 @@ impl Report for ParseError {
     }
 
     #[inline]
-    fn error(&mut self, span: Span<'_>, msg: impl Display) {
+    fn error<T: Display, M: Display>(&mut self, span: Span<T>, msg: M) {
         match span {
             Span::Eof(line) => self.report(line, " at end", msg),
             Span::Token(token, line) => {

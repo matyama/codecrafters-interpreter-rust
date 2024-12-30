@@ -20,12 +20,12 @@ use token::EOF;
 pub(crate) trait Report {
     fn report(&mut self, line: usize, location: &str, msg: impl Display);
 
-    fn error(&mut self, span: Span<'_>, msg: impl Display);
+    fn error<T: Display, M: Display>(&mut self, span: Span<T>, msg: M);
 }
 
-pub(crate) enum Span<'a> {
+pub(crate) enum Span<T> {
     Eof(usize),
-    Token(&'a str, usize),
+    Token(T, usize),
 }
 
 fn read_file_contents(file: impl AsRef<Path>) -> String {
