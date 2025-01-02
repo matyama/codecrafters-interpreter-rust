@@ -2,8 +2,7 @@ use std::any::Any;
 use std::fmt::Display;
 
 use crate::error::{IntoRuntimeError as _, RuntimeError};
-use crate::expr::{Atom, Cons, Expr, Literal, Operator};
-use crate::ir::{Print, Program, Stmt};
+use crate::ir::{Atom, Cons, Expr, Literal, Operator, Print, Program, Stmt};
 
 #[derive(Debug)]
 #[repr(transparent)]

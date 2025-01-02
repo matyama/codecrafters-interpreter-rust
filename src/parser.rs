@@ -3,8 +3,7 @@ use std::iter::Peekable;
 use std::str::FromStr;
 
 use crate::error::SyntaxError;
-use crate::expr::{Atom, Expr, Operator};
-use crate::ir::{Print, Program, Stmt};
+use crate::ir::{Atom, Expr, Operator, Print, Program, Stmt};
 use crate::lexer::{Lexer, TokenStream};
 use crate::span::Span;
 use crate::token::{Keyword, LexToken, Literal, Token};

@@ -1,5 +1,4 @@
 mod error;
-mod expr;
 mod interpreter;
 mod ir;
 mod lexer;
@@ -12,9 +11,8 @@ use std::fs;
 use std::path::Path;
 use std::process::{ExitCode, Termination};
 
-use expr::Expr;
 use interpreter::{Evaluate as _, Interpret as _};
-use ir::Program;
+use ir::{Expr, Program};
 use lexer::Lexer;
 use token::EOF;
 
