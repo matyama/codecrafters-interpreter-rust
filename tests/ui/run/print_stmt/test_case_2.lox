@@ -1,0 +1,3 @@
+print "hello"; print true;
+print false;
+print "bar"; print 43;

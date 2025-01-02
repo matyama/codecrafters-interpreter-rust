@@ -1,6 +1,7 @@
 mod error;
 mod expr;
 mod interpreter;
+mod ir;
 mod lexer;
 mod parser;
 mod span;
@@ -11,7 +12,9 @@ use std::fs;
 use std::path::Path;
 use std::process::{ExitCode, Termination};
 
-use interpreter::Interpret as _;
+use expr::Expr;
+use interpreter::{Evaluate as _, Interpret as _};
+use ir::Program;
 use lexer::Lexer;
 use token::EOF;
 
@@ -58,7 +61,7 @@ fn main() -> impl Termination {
         "parse" => {
             let source = read_file_contents(filename);
 
-            match parser::parse(&source) {
+            match source.parse::<Expr>() {
                 Ok(expr) => {
                     println!("{expr}");
                     ExitCode::SUCCESS
@@ -73,12 +76,12 @@ fn main() -> impl Termination {
         "evaluate" => {
             let source = read_file_contents(filename);
 
-            let expr = match parser::parse(&source) {
+            let expr = match source.parse::<Expr>() {
                 Ok(expr) => expr,
                 Err(error) => return error.report(),
             };
 
-            match expr.interpret() {
+            match expr.evaluate() {
                 Ok(value) => {
                     println!("{value}");
                     ExitCode::SUCCESS
@@ -87,6 +90,22 @@ fn main() -> impl Termination {
                     eprintln!("{error}");
                     error.report()
                 }
+            }
+        }
+
+        "run" => {
+            let source = read_file_contents(filename);
+
+            let prog = match source.parse::<Program>() {
+                Ok(prog) => prog,
+                Err(error) => return error.report(),
+            };
+
+            if let Err(error) = prog.interpret() {
+                eprintln!("{error}");
+                error.report()
+            } else {
+                ExitCode::SUCCESS
             }
         }
 

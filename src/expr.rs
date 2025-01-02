@@ -1,4 +1,5 @@
 use std::fmt::Display;
+use std::ops::Add;
 
 use crate::span::Span;
 use crate::token::{LexToken, Token};
@@ -58,6 +59,16 @@ impl Display for Atom {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.literal.fmt(f)
+    }
+}
+
+impl Add<Span> for Atom {
+    type Output = Self;
+
+    #[inline]
+    fn add(mut self, span: Span) -> Self::Output {
+        self.span += span;
+        self
     }
 }
 
@@ -134,6 +145,16 @@ pub struct Cons {
     pub span: Span,
 }
 
+impl Add<Span> for Cons {
+    type Output = Self;
+
+    #[inline]
+    fn add(mut self, span: Span) -> Self::Output {
+        self.span += span;
+        self
+    }
+}
+
 /// An [S-expression][sexpr] representation of program's expressions.
 ///
 /// [sexpr]: https://en.wikipedia.org/wiki/S-expression
@@ -187,6 +208,18 @@ impl Display for Expr {
                 }
                 f.write_str(")")
             }
+        }
+    }
+}
+
+impl Add<Span> for Expr {
+    type Output = Self;
+
+    #[inline]
+    fn add(self, span: Span) -> Self::Output {
+        match self {
+            Self::Atom(atom) => Self::Atom(atom + span),
+            Self::Cons(cons) => Self::Cons(cons + span),
         }
     }
 }

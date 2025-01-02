@@ -3,6 +3,7 @@ use std::fmt::Display;
 
 use crate::error::{IntoRuntimeError as _, RuntimeError};
 use crate::expr::{Atom, Cons, Expr, Literal, Operator};
+use crate::ir::{Print, Program, Stmt};
 
 #[derive(Debug)]
 #[repr(transparent)]
@@ -148,30 +149,30 @@ impl Display for Value {
     }
 }
 
-pub trait Interpret {
-    fn interpret(self) -> Result<Value, RuntimeError>;
+pub trait Evaluate {
+    fn evaluate(self) -> Result<Value, RuntimeError>;
 }
 
-impl Interpret for Expr {
+impl Evaluate for Expr {
     #[inline]
-    fn interpret(self) -> Result<Value, RuntimeError> {
+    fn evaluate(self) -> Result<Value, RuntimeError> {
         match self {
-            Self::Atom(atom) => atom.interpret(),
-            Self::Cons(cons) => cons.interpret(),
+            Self::Atom(atom) => atom.evaluate(),
+            Self::Cons(cons) => cons.evaluate(),
         }
     }
 }
 
-impl Interpret for Atom {
+impl Evaluate for Atom {
     #[inline]
-    fn interpret(self) -> Result<Value, RuntimeError> {
-        self.literal.interpret()
+    fn evaluate(self) -> Result<Value, RuntimeError> {
+        self.literal.evaluate()
     }
 }
 
-impl Interpret for Literal {
+impl Evaluate for Literal {
     #[inline]
-    fn interpret(self) -> Result<Value, RuntimeError> {
+    fn evaluate(self) -> Result<Value, RuntimeError> {
         Ok(match self {
             Self::Str(s) => Value::obj(s),
             Self::Num(n) => Value::obj(n),
@@ -181,8 +182,8 @@ impl Interpret for Literal {
     }
 }
 
-impl Interpret for Cons {
-    fn interpret(mut self) -> Result<Value, RuntimeError> {
+impl Evaluate for Cons {
+    fn evaluate(mut self) -> Result<Value, RuntimeError> {
         let binary_args = |mut args: Vec<Expr>| match (args.pop(), args.pop()) {
             (Some(rhs), Some(lhs)) => Some((lhs, rhs)),
             _ => None,
@@ -191,7 +192,7 @@ impl Interpret for Cons {
         match self.op {
             Operator::Bang => match self.args.pop() {
                 Some(rhs) => {
-                    let value = rhs.interpret()?;
+                    let value = rhs.evaluate()?;
                     Ok(Value::obj(!value.into_bool()))
                 }
                 None => Err(self.span.into_error("Operand must be an expression.")),
@@ -204,13 +205,13 @@ impl Interpret for Cons {
                         .into_error("Operands must be two numbers or two strings."));
                 };
 
-                let Value::Object(Object(mut lhs)) = lhs.interpret()? else {
+                let Value::Object(Object(mut lhs)) = lhs.evaluate()? else {
                     return Err(self
                         .span
                         .into_error("Operands must be two numbers or two strings."));
                 };
 
-                let Value::Object(Object(rhs)) = rhs.interpret()? else {
+                let Value::Object(Object(rhs)) = rhs.evaluate()? else {
                     return Err(self
                         .span
                         .into_error("Operands must be two numbers or two strings."));
@@ -235,13 +236,13 @@ impl Interpret for Cons {
 
             Operator::Minus => match (self.args.pop(), self.args.pop()) {
                 (Some(rhs), None) => {
-                    let rhs = rhs.interpret()?;
+                    let rhs = rhs.evaluate()?;
                     rhs.map::<f64>(|v| *v = -*v)
                         .map_err(|_| self.span.into_error("Operand must be a number."))
                 }
                 (Some(rhs), Some(lhs)) => {
-                    let lhs = lhs.interpret()?;
-                    let rhs = rhs.interpret()?;
+                    let lhs = lhs.evaluate()?;
+                    let rhs = rhs.evaluate()?;
 
                     lhs.combine::<f64, f64>(rhs, |x, y| x - y)
                         .map_err(|_| self.span.into_error("Operands must be numbers."))
@@ -256,8 +257,8 @@ impl Interpret for Cons {
                     return Err(self.span.into_error("Operands must be numbers."));
                 };
 
-                let lhs = lhs.interpret()?;
-                let rhs = rhs.interpret()?;
+                let lhs = lhs.evaluate()?;
+                let rhs = rhs.evaluate()?;
 
                 lhs.combine::<f64, f64>(rhs, |x, y| x / y)
                     .map_err(|_| self.span.into_error("Operands must be numbers."))
@@ -268,8 +269,8 @@ impl Interpret for Cons {
                     return Err(self.span.into_error("Operands must be numbers."));
                 };
 
-                let lhs = lhs.interpret()?;
-                let rhs = rhs.interpret()?;
+                let lhs = lhs.evaluate()?;
+                let rhs = rhs.evaluate()?;
 
                 lhs.combine::<f64, f64>(rhs, |x, y| x * y)
                     .map_err(|_| self.span.into_error("Operands must be numbers."))
@@ -280,8 +281,8 @@ impl Interpret for Cons {
                     return Err(self.span.into_error("Operands must be numbers."));
                 };
 
-                let lhs = lhs.interpret()?;
-                let rhs = rhs.interpret()?;
+                let lhs = lhs.evaluate()?;
+                let rhs = rhs.evaluate()?;
 
                 lhs.combine::<f64, bool>(rhs, |x, y| x > y)
                     .map_err(|_| self.span.into_error("Operands must be numbers."))
@@ -292,8 +293,8 @@ impl Interpret for Cons {
                     return Err(self.span.into_error("Operands must be numbers."));
                 };
 
-                let lhs = lhs.interpret()?;
-                let rhs = rhs.interpret()?;
+                let lhs = lhs.evaluate()?;
+                let rhs = rhs.evaluate()?;
 
                 lhs.combine::<f64, bool>(rhs, |x, y| x >= y)
                     .map_err(|_| self.span.into_error("Operands must be numbers."))
@@ -304,8 +305,8 @@ impl Interpret for Cons {
                     return Err(self.span.into_error("Operands must be numbers."));
                 };
 
-                let lhs = lhs.interpret()?;
-                let rhs = rhs.interpret()?;
+                let lhs = lhs.evaluate()?;
+                let rhs = rhs.evaluate()?;
 
                 lhs.combine::<f64, bool>(rhs, |x, y| x < y)
                     .map_err(|_| self.span.into_error("Operands must be numbers."))
@@ -316,8 +317,8 @@ impl Interpret for Cons {
                     return Err(self.span.into_error("Operands must be numbers."));
                 };
 
-                let lhs = lhs.interpret()?;
-                let rhs = rhs.interpret()?;
+                let lhs = lhs.evaluate()?;
+                let rhs = rhs.evaluate()?;
 
                 lhs.combine::<f64, bool>(rhs, |x, y| x <= y)
                     .map_err(|_| self.span.into_error("Operands must be numbers."))
@@ -328,8 +329,8 @@ impl Interpret for Cons {
                     return Err(self.span.into_error("Operands must be numbers."));
                 };
 
-                let lhs = lhs.interpret()?;
-                let rhs = rhs.interpret()?;
+                let lhs = lhs.evaluate()?;
+                let rhs = rhs.evaluate()?;
 
                 Ok(Value::obj(lhs != rhs))
             }
@@ -339,18 +340,47 @@ impl Interpret for Cons {
                     return Err(self.span.into_error("Operands must be numbers."));
                 };
 
-                let lhs = lhs.interpret()?;
-                let rhs = rhs.interpret()?;
+                let lhs = lhs.evaluate()?;
+                let rhs = rhs.evaluate()?;
 
                 Ok(Value::obj(lhs == rhs))
             }
 
             Operator::LeftParen => match self.args.pop() {
-                Some(expr) => expr.interpret(),
+                Some(expr) => expr.evaluate(),
                 None => Err(self.span.into_error("Operand must be an expression.")),
             },
 
             op => unimplemented!("interpret {op:?}"),
         }
+    }
+}
+
+pub trait Interpret {
+    fn interpret(self) -> Result<(), RuntimeError>;
+}
+
+impl Interpret for Program {
+    #[inline]
+    fn interpret(self) -> Result<(), RuntimeError> {
+        self.into_iter().try_for_each(Stmt::interpret)
+    }
+}
+
+impl Interpret for Stmt {
+    #[inline]
+    fn interpret(self) -> Result<(), RuntimeError> {
+        match self {
+            Self::Expr(expr) => expr.evaluate().map(|_| ()),
+            Self::Print(print) => print.interpret(),
+        }
+    }
+}
+
+impl Interpret for Print {
+    fn interpret(self) -> Result<(), RuntimeError> {
+        let value = self.expr.evaluate()?;
+        println!("{value}");
+        Ok(())
     }
 }

@@ -1,35 +1,118 @@
 use std::borrow::Cow;
 use std::iter::Peekable;
+use std::str::FromStr;
 
 use crate::error::SyntaxError;
 use crate::expr::{Atom, Expr, Operator};
+use crate::ir::{Print, Program, Stmt};
 use crate::lexer::{Lexer, TokenStream};
 use crate::span::Span;
-use crate::token::{LexToken, Literal, Token};
+use crate::token::{Keyword, LexToken, Literal, Token};
 
-/// Parse a sequence of tokens according to the following grammar:
-/// ```
-/// expression     → equality ;
-/// equality       → comparison ( ( "!=" | "==" ) comparison )* ;
-/// comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
-/// term           → factor ( ( "-" | "+" ) factor )* ;
-/// factor         → unary ( ( "/" | "*" ) unary )* ;
-/// unary          → ( "!" | "-" ) unary
-///                | primary ;
-/// primary        → NUMBER | STRING | "true" | "false" | "nil"
-///                | "(" expression ")" ;
-/// ```
-pub fn parse(source: &str) -> Result<Expr, SyntaxError> {
-    Parser::new(source).parse()
+impl FromStr for Expr {
+    type Err = SyntaxError;
+
+    fn from_str(source: &str) -> Result<Self, Self::Err> {
+        Parser::new(source).parse_expr()
+    }
+}
+
+impl FromStr for Program {
+    type Err = SyntaxError;
+
+    fn from_str(source: &str) -> Result<Self, Self::Err> {
+        Parser::new(source).parse_prog()
+    }
 }
 
 macro_rules! rule {
 
-    // models: expression → equality ;
-    ($head:ident -> $rule:ident ;) => {
-        fn $head(&mut self) -> Result<Expr, SyntaxError> {
-            self.$rule()
+    // models: program → statement* EOF ;
+    ($head:ident -> $statement:ident$_:tt EOF ;) => {
+        fn $head(&mut self) -> Result<Program, SyntaxError> {
+            let mut stmts = Vec::new();
+
+            loop {
+                let Ok(next) = self.peek() else {
+                    let Err(error) = self.advance() else {
+                        unreachable!("peeked an error");
+                    };
+                    break Err(error);
+                };
+
+                // check EOF
+                if next.is_err() {
+                    break Ok(Program(stmts));
+                }
+
+                match self.$statement() {
+                    Ok(stmt) => stmts.push(stmt),
+                    Err(err) => break Err(err),
+                }
+            }
         }
+    };
+
+    // models simple rule alternatives:
+    //  - statement  → expr_stmt | print_stmt ;
+    //  - expression → equality ;
+    ($($head:ident -> $rule0:ident $(| $rule:ident)* ; # $t:ty)+) => {
+        $(
+            fn $head(&mut self) -> Result<$t, SyntaxError> {
+                $(
+                    if let Some(res) = self.$rule()?.map(<$t>::from) {
+                        return Ok(res);
+                    }
+                )*
+                self.$rule0().map(<$t>::from)
+            }
+        )+
+    };
+
+    // models expr_stmt → expression ";" ;
+    ($($head:ident -> $rule:ident ";" ; # $t:ty)+) => {
+        $(
+            fn $head(&mut self) -> Result<$t, SyntaxError> {
+                let expr = self.$rule()?;
+                let span = self.semicolon()?;
+                Ok(expr + span)
+            }
+        )+
+    };
+
+    // models print_stmt → "print" expression ";" ;
+    ($($head:ident -> $_kw:literal $rule:ident ";" ; # $t:ident)+) => {
+        $(
+            fn $head(&mut self) -> Result<Option<$t>, SyntaxError> {
+                let Ok(next) = self.peek() else {
+                    let Err(error) = self.advance() else {
+                        unreachable!("peeked an error");
+                    };
+                    return Err(error);
+                };
+
+                let Ok(LexToken {
+                    token: Token::Keyword(Keyword::$t),
+                    span,
+                    ..
+                }) = next
+                else {
+                    return Ok(None);
+                };
+
+                let mut span = span.clone();
+                let _ = self.advance()?;
+
+                // TODO: generalize to other kinds of statements
+                // parse expression
+                let expr = self.$rule()?;
+                span += expr.span();
+
+                // parse ;
+                span += self.semicolon()?;
+                Ok(Some($t { expr, span }))
+            }
+        )+
     };
 
     // models: equality → comparison ( ( "!=" | "==" ) comparison )* ;
@@ -249,13 +332,83 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn semicolon(&mut self) -> Result<Span, SyntaxError> {
+        match self.advance()? {
+            Ok(LexToken {
+                token: Token::Semicolon,
+                span,
+                ..
+            }) => Ok(span.clone()),
+
+            Ok(LexToken { lexeme, span, .. }) => {
+                let span = span.clone();
+                let loc = ErrLoc::at(lexeme);
+                Err(self.error(span, "Expect ';' after statement.", loc))
+            }
+
+            Err(lineno) => {
+                // FIXME: proper span
+                let mut span = Span::empty();
+                span.lineno = lineno;
+                Err(self.error(span, "Expect ';' after statement.", ErrLoc::Eof))
+            }
+        }
+    }
+
+    /// Parse a sequence of tokens according to the following grammar:
+    /// ```
+    /// program        → statement* EOF ;
+    /// statement      → expr_stmt
+    ///                | print_stmt ;
+    /// expr_stmt      → expression ";" ;
+    /// print_stmt     → "print" expression ";" ;
+    /// expression     → equality ;
+    /// equality       → comparison ( ( "!=" | "==" ) comparison )* ;
+    /// comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
+    /// term           → factor ( ( "-" | "+" ) factor )* ;
+    /// factor         → unary ( ( "/" | "*" ) unary )* ;
+    /// unary          → ( "!" | "-" ) unary
+    ///                | primary ;
+    /// primary        → NUMBER | STRING | "true" | "false" | "nil"
+    ///                | "(" expression ")" ;
+    /// ```
     #[inline]
-    pub fn parse(mut self) -> Result<Expr, SyntaxError> {
+    pub fn parse_prog(mut self) -> Result<Program, SyntaxError> {
+        self.program()
+    }
+
+    /// Parse a sequence of tokens according to the following grammar:
+    /// ```
+    /// expression     → equality ;
+    /// equality       → comparison ( ( "!=" | "==" ) comparison )* ;
+    /// comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
+    /// term           → factor ( ( "-" | "+" ) factor )* ;
+    /// factor         → unary ( ( "/" | "*" ) unary )* ;
+    /// unary          → ( "!" | "-" ) unary
+    ///                | primary ;
+    /// primary        → NUMBER | STRING | "true" | "false" | "nil"
+    ///                | "(" expression ")" ;
+    /// ```
+    #[inline]
+    pub fn parse_expr(mut self) -> Result<Expr, SyntaxError> {
         self.expression()
     }
 
     rule! {
-        expression -> equality ;
+        program    -> statement* EOF ;
+    }
+
+    rule! {
+        statement  -> expr_stmt | print_stmt ; #  Stmt
+        expression -> equality ;               #  Expr
+    }
+
+    rule! {
+        expr_stmt  -> expression ";" ;         #  Expr
+    }
+
+    rule! {
+        print_stmt -> "print" expression ";" ; #  Print
     }
 
     rule! {

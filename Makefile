@@ -1,4 +1,4 @@
-TESTS := test-tokenize test-parse test-evaluate
+TESTS := test-tokenize test-parse test-evaluate test-run
 TESTS_DIR := tests
 
 .PHONY: test
