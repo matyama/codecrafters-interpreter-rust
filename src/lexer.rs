@@ -27,13 +27,7 @@ impl<'prg> IntoIterator for Lexer<'prg> {
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
-        TokenStream {
-            prg: self.0,
-            pos: 0,
-            chars: self.0.chars().peekable(),
-            line: 0,
-            line_pos: 0,
-        }
+        TokenStream::new(self.0)
     }
 }
 
@@ -50,7 +44,18 @@ pub struct TokenStream<'prg> {
     line_pos: usize,
 }
 
-impl TokenStream<'_> {
+impl<'prg> TokenStream<'prg> {
+    #[inline]
+    fn new(prg: &'prg str) -> Self {
+        Self {
+            prg,
+            pos: 0,
+            chars: prg.chars().peekable(),
+            line: 0,
+            line_pos: 0,
+        }
+    }
+
     fn error(
         &self,
         start: usize,
@@ -76,6 +81,12 @@ impl TokenStream<'_> {
         }
     }
 
+    /// Advance current character stream cursor to the next character boundary
+    #[allow(deprecated)]
+    fn advance_pos(&mut self) {
+        self.pos = unstable::ceil_char_boundary(self.prg, self.pos + 1);
+    }
+
     /// Advance the character stream while predicate `p` is false.
     ///
     /// Side effects:
@@ -94,7 +105,7 @@ impl TokenStream<'_> {
             }
             visit(self, c);
             let _ = self.chars.next();
-            self.pos += 1;
+            self.advance_pos()
         }
         None
     }
@@ -106,13 +117,9 @@ impl TokenStream<'_> {
     }
 
     #[inline]
-    fn peek(&self, n: usize) -> Option<char> {
+    pub(crate) fn peek(&self, n: usize) -> Option<char> {
         debug_assert!(n > 0, "zero look-ahead");
-        let i = self.pos + n - 1;
-        self.prg
-            .get(i..i + 1)
-            // SAFETY: requested a slice of exactly one character
-            .map(|s| unsafe { s.chars().nth(0).unwrap_unchecked() })
+        self.chars.clone().nth(n - 1)
     }
 }
 
@@ -124,7 +131,7 @@ impl<'prg> Iterator for TokenStream<'prg> {
             let c = self.chars.next()?;
 
             let start = self.pos;
-            self.pos += 1;
+            self.advance_pos();
 
             macro_rules! yield_token {
                 ($token:ident) => {{
@@ -137,7 +144,7 @@ impl<'prg> Iterator for TokenStream<'prg> {
 
                 (if $next:literal { $then:stmt } else { $y:ident }) => {{
                     if self.chars.next_if_eq(&$next).is_some() {
-                        self.pos += 1;
+                        self.advance_pos();
                         $then
                     } else {
                         yield_token!($y);
@@ -201,7 +208,7 @@ impl<'prg> Iterator for TokenStream<'prg> {
 
                     // closing quote
                     if self.chars.next().is_some() {
-                        self.pos += 1;
+                        self.advance_pos();
                     } else {
                         return Some(Err(self.error(start, "Unterminated string.")));
                     };
@@ -223,7 +230,7 @@ impl<'prg> Iterator for TokenStream<'prg> {
                     if next.is_some_and(dot) && self.peek(2).is_some_and(digit) {
                         // consume the '.'
                         let _ = self.chars.next();
-                        self.pos += 1;
+                        self.advance_pos();
 
                         self.advance_until(non_digit);
                     }
@@ -311,6 +318,30 @@ mod matcher {
     }
 }
 
+#[deprecated = "https://doc.rust-lang.org/std/primitive.str.html#method.ceil_char_boundary"]
+pub(super) mod unstable {
+
+    #[inline]
+    pub fn ceil_char_boundary(s: &str, index: usize) -> usize {
+        if index > s.len() {
+            s.len()
+        } else {
+            let upper_bound = Ord::min(index + 4, s.len());
+            s.as_bytes()[index..upper_bound]
+                .iter()
+                .position(|b| is_utf8_char_boundary(*b))
+                .map_or(upper_bound, |pos| pos + index)
+        }
+    }
+
+    // https://doc.rust-lang.org/src/core/num/mod.rs.html
+    #[inline]
+    const fn is_utf8_char_boundary(b: u8) -> bool {
+        // This is bit magic equivalent to: b < 128 || b >= 192
+        (b as i8) >= -0x40
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +358,19 @@ mod tests {
             }
             (tokens, errors)
         }};
+    }
+
+    #[test]
+    fn peek_non_ascii() {
+        assert_eq!(TokenStream::new(r#""ॐ";"#).peek(2), Some('ॐ'));
+        assert_eq!(TokenStream::new("xॐ").peek(2), Some('ॐ'));
+        assert_eq!(TokenStream::new("ॐ").peek(1), Some('ॐ'));
+    }
+
+    #[test]
+    fn non_ascii_input() {
+        let (_, errors) = tokenize!(r#"print "non-ascii: ॐ";"#);
+        assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
     }
 
     #[test]
