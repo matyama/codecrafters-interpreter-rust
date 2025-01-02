@@ -1,0 +1,4 @@
+var baz = 69;
+var world;
+var quz;
+print world;

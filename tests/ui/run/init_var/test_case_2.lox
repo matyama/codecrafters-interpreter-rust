@@ -1,0 +1,3 @@
+var baz = "foo";
+var bar;
+print bar;

@@ -4,7 +4,7 @@ use std::ops::Add;
 use crate::span::Span;
 use crate::token::{LexToken, Token};
 
-/// Atomic expression (literal values)
+/// Atomic expression (literal values and variables)
 #[derive(Default, Clone, Debug)]
 pub enum Literal {
     #[default]
@@ -12,6 +12,7 @@ pub enum Literal {
     Bool(bool),
     Num(f64),
     Str(String),
+    Var(String),
 }
 
 impl Display for Literal {
@@ -22,6 +23,7 @@ impl Display for Literal {
             Self::Num(n) if n.fract() > 0.0 => write!(f, "{n}"),
             Self::Num(n) => write!(f, "{n:.1}"),
             Self::Str(s) => write!(f, "{s}"),
+            Self::Var(x) => write!(f, "{x}"),
         }
     }
 }
@@ -35,6 +37,7 @@ impl From<&Token<'_>> for Literal {
             Token::Keyword(Nil) => Self::Nil,
             Token::Literal(Str(s)) => Self::Str(s.to_string()),
             Token::Literal(Num(n)) => Self::Num(*n),
+            Token::Literal(Ident(x)) => Self::Var(x.to_string()),
             _ => Self::Nil,
         }
     }
@@ -224,19 +227,48 @@ impl Add<Span> for Expr {
     }
 }
 
-// TODO: move expr here as well
 #[derive(Debug)]
 #[repr(transparent)]
-pub struct Program(pub(crate) Vec<Stmt>);
+pub struct Program(pub(crate) Vec<Decl>);
 
 impl IntoIterator for Program {
-    type Item = Stmt;
-    type IntoIter = <Vec<Stmt> as IntoIterator>::IntoIter;
+    type Item = Decl;
+    type IntoIter = <Vec<Decl> as IntoIterator>::IntoIter;
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
+}
+
+/// Declarations
+#[derive(Debug)]
+pub enum Decl {
+    Var(Var),
+    Stmt(Stmt),
+}
+
+impl From<Var> for Decl {
+    #[inline]
+    fn from(var: Var) -> Self {
+        Self::Var(var)
+    }
+}
+
+impl From<Stmt> for Decl {
+    #[inline]
+    fn from(stmt: Stmt) -> Self {
+        Self::Stmt(stmt)
+    }
+}
+
+/// Variable declaration of the form: `var <IDENTIFIER> (=<EXPRESSION>)?;`
+#[derive(Debug)]
+pub struct Var {
+    // TODO: more efficient variable representation
+    pub ident: String,
+    pub expr: Option<Expr>,
+    pub span: Span,
 }
 
 // TODO: represent statements as S-expressions

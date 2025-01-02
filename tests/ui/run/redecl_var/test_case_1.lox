@@ -1,0 +1,4 @@
+var baz = "before";
+print baz;
+var baz = "after";
+print baz;

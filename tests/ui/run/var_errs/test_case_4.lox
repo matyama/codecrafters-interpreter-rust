@@ -1,0 +1,4 @@
+var quz = 20;
+var world = 51;
+var hello = 56;
+print quz + world + he;

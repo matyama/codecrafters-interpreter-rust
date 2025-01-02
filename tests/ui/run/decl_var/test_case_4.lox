@@ -1,0 +1,3 @@
+var quz = 76;
+var baz = quz;
+print baz + quz;

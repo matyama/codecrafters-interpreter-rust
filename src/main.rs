@@ -11,7 +11,6 @@ use std::fs;
 use std::path::Path;
 use std::process::{ExitCode, Termination};
 
-use interpreter::{Evaluate as _, Interpret as _};
 use ir::{Expr, Program};
 use lexer::Lexer;
 use token::EOF;
@@ -79,7 +78,7 @@ fn main() -> impl Termination {
                 Err(error) => return error.report(),
             };
 
-            match expr.evaluate() {
+            match interpreter::evaluate(expr) {
                 Ok(value) => {
                     println!("{value}");
                     ExitCode::SUCCESS
@@ -99,7 +98,7 @@ fn main() -> impl Termination {
                 Err(error) => return error.report(),
             };
 
-            if let Err(error) = prog.interpret() {
+            if let Err(error) = interpreter::interpret(prog) {
                 eprintln!("{error}");
                 error.report()
             } else {

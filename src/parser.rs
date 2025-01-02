@@ -3,7 +3,7 @@ use std::iter::Peekable;
 use std::str::FromStr;
 
 use crate::error::SyntaxError;
-use crate::ir::{Atom, Expr, Operator, Print, Program, Stmt};
+use crate::ir::{Atom, Decl, Expr, Operator, Print, Program, Stmt, Var};
 use crate::lexer::{Lexer, TokenStream};
 use crate::span::Span;
 use crate::token::{Keyword, LexToken, Literal, Token};
@@ -26,10 +26,10 @@ impl FromStr for Program {
 
 macro_rules! rule {
 
-    // models: program → statement* EOF ;
-    ($head:ident -> $statement:ident$_:tt EOF ;) => {
+    // models: program → declaration* EOF ;
+    ($head:ident -> $declaration:ident$_:tt EOF ;) => {
         fn $head(&mut self) -> Result<Program, SyntaxError> {
-            let mut stmts = Vec::new();
+            let mut declarations = Vec::new();
 
             loop {
                 let Ok(next) = self.peek() else {
@@ -41,11 +41,11 @@ macro_rules! rule {
 
                 // check EOF
                 if next.is_err() {
-                    break Ok(Program(stmts));
+                    break Ok(Program(declarations));
                 }
 
-                match self.$statement() {
-                    Ok(stmt) => stmts.push(stmt),
+                match self.$declaration() {
+                    Ok(decl) => declarations.push(decl),
                     Err(err) => break Err(err),
                 }
             }
@@ -53,8 +53,9 @@ macro_rules! rule {
     };
 
     // models simple rule alternatives:
-    //  - statement  → expr_stmt | print_stmt ;
-    //  - expression → equality ;
+    //  - declaration → var_decl  | statement ;
+    //  - statement   → expr_stmt | print_stmt ;
+    //  - expression  → equality ;
     ($($head:ident -> $rule0:ident $(| $rule:ident)* ; # $t:ty)+) => {
         $(
             fn $head(&mut self) -> Result<$t, SyntaxError> {
@@ -66,6 +67,63 @@ macro_rules! rule {
                 self.$rule0().map(<$t>::from)
             }
         )+
+    };
+
+    // models var_decl → "var" IDENTIFIER ( "=" expression )? ";" ;
+    ($head:ident -> $_kw:literal $ident:ident ( "=" $init:ident )? ";" ; # $t:ident) => {
+        fn $head(&mut self) -> Result<Option<$t>, SyntaxError> {
+            let Ok(next) = self.peek() else {
+                let Err(error) = self.advance() else {
+                    unreachable!("peeked an error");
+                };
+                return Err(error);
+            };
+
+            let Ok(LexToken {
+                token: Token::Keyword(Keyword::$t),
+                span,
+                ..
+            }) = next
+            else {
+                return Ok(None);
+            };
+
+            let mut span = span.clone();
+            let _ = self.advance()?;
+
+            // mandatory variable identifier
+            let (ident, s) = self.$ident()?;
+            span += s;
+
+            // optional initializer expression
+            let Ok(next) = self.peek() else {
+                let Err(error) = self.advance() else {
+                    unreachable!("peeked an error");
+                };
+                return Err(error);
+            };
+
+            let expr = match next {
+                Ok(LexToken {
+                    token: Token::Equal,
+                    ..
+                }) => {
+                    let _ = self.advance()?;
+
+                    // parse expression
+                    let expr = self.$init()?;
+                    span += expr.span();
+
+                    Some(expr)
+                }
+
+                _ => None,
+            };
+
+            // parse ;
+            span += self.semicolon()?;
+            Ok(Some(Var { ident, expr, span }))
+        }
     };
 
     // models expr_stmt → expression ";" ;
@@ -189,7 +247,7 @@ macro_rules! rule {
         )+
     };
 
-    // models: primary → NUMBER | STRING | "true" | "false" | "nil" | "(" expression ")" ;
+    // models: primary → NUMBER | STRING | "true" | "false" | "nil" | "(" expression ")" | IDENTIFIER ;
     ($head:ident -> $ty0:ident $(| $ty:ident)* | "true" | "false" | "nil" | ( $group:ident ) ;) => {
         fn $head(&mut self) -> Result<Expr, SyntaxError> {
             use crate::token::Keyword::*;
@@ -331,6 +389,31 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn identifier(&mut self) -> Result<(String, Span), SyntaxError> {
+        match self.advance()? {
+            Ok(LexToken {
+                token: Token::Literal(Literal::Ident(ident)),
+                span,
+                ..
+            }) => Ok((ident.to_string(), span.clone())),
+
+            Ok(LexToken { lexeme, span, .. }) => {
+                let span = span.clone();
+                let loc = ErrLoc::at(lexeme);
+                let msg = "Expect IDENTIFIER after 'var'.";
+                Err(self.error(span, msg, loc))
+            }
+
+            Err(lineno) => {
+                // FIXME: proper span
+                let mut span = Span::empty();
+                span.lineno = lineno;
+                let msg = "Expect IDENTIFIER after 'var'.";
+                Err(self.error(span, msg, ErrLoc::Eof))
+            }
+        }
+    }
+
     fn semicolon(&mut self) -> Result<Span, SyntaxError> {
         match self.advance()? {
             Ok(LexToken {
@@ -356,7 +439,10 @@ impl<'a> Parser<'a> {
 
     /// Parse a sequence of tokens according to the following grammar:
     /// ```
-    /// program        → statement* EOF ;
+    /// program        → declaration* EOF ;
+    /// declaration    → var_decl
+    ///                | statement ;
+    /// var_decl       → "var" IDENTIFIER ( "=" expression )? ";" ;
     /// statement      → expr_stmt
     ///                | print_stmt ;
     /// expr_stmt      → expression ";" ;
@@ -369,7 +455,8 @@ impl<'a> Parser<'a> {
     /// unary          → ( "!" | "-" ) unary
     ///                | primary ;
     /// primary        → NUMBER | STRING | "true" | "false" | "nil"
-    ///                | "(" expression ")" ;
+    ///                | "(" expression ")"
+    ///                | IDENTIFIER ;
     /// ```
     #[inline]
     pub fn parse_prog(mut self) -> Result<Program, SyntaxError> {
@@ -386,7 +473,8 @@ impl<'a> Parser<'a> {
     /// unary          → ( "!" | "-" ) unary
     ///                | primary ;
     /// primary        → NUMBER | STRING | "true" | "false" | "nil"
-    ///                | "(" expression ")" ;
+    ///                | "(" expression ")"
+    ///                | IDENTIFIER ;
     /// ```
     #[inline]
     pub fn parse_expr(mut self) -> Result<Expr, SyntaxError> {
@@ -394,35 +482,40 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        program    -> statement* EOF ;
+        program     -> declaration* EOF ;
     }
 
     rule! {
-        statement  -> expr_stmt | print_stmt ; #  Stmt
-        expression -> equality ;               #  Expr
+        declaration -> statement | var_decl   ;                   #  Decl
+        statement   -> expr_stmt | print_stmt ;                   #  Stmt
+        expression  -> equality ;                                 #  Expr
     }
 
     rule! {
-        expr_stmt  -> expression ";" ;         #  Expr
+        var_decl    -> "var" identifier ( "=" expression )? ";" ; #  Var
     }
 
     rule! {
-        print_stmt -> "print" expression ";" ; #  Print
+        expr_stmt   -> expression ";" ;                           #  Expr
     }
 
     rule! {
-        equality   -> comparison ( (BangEqual | EqualEqual) comparison)* ;
-        comparison -> term ( (Greater | GreaterEqual | Less | LessEqual) term )* ;
-        term       -> factor ( (Minus | Plus) factor)* ;
-        factor     -> unary ( (Slash | Star ) unary )* ;
+        print_stmt  -> "print" expression ";" ;                   #  Print
     }
 
     rule! {
-        unary      -> (Bang | Minus) unary | primary ;
+        equality    -> comparison ( (BangEqual | EqualEqual) comparison)* ;
+        comparison  -> term ( (Greater | GreaterEqual | Less | LessEqual) term )* ;
+        term        -> factor ( (Minus | Plus) factor)* ;
+        factor      -> unary ( (Slash | Star ) unary )* ;
     }
 
     rule! {
-        primary    -> Num | Str | "true" | "false" | "nil" | ( expression ) ;
+        unary       -> (Bang | Minus) unary | primary ;
+    }
+
+    rule! {
+        primary     -> Num | Str | Ident | "true" | "false" | "nil" | ( expression ) ;
     }
 }
 

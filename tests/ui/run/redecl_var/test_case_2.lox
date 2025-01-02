@@ -1,0 +1,4 @@
+var hello = "after";
+var hello = "before";
+var hello = hello;
+print hello;
