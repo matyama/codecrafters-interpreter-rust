@@ -301,8 +301,16 @@ pub struct Var {
 // TODO: represent statements as S-expressions
 #[derive(Debug)]
 pub enum Stmt {
+    Block(Block),
     Expr(Expr),
     Print(Print),
+}
+
+impl From<Block> for Stmt {
+    #[inline]
+    fn from(block: Block) -> Self {
+        Self::Block(block)
+    }
 }
 
 impl From<Expr> for Stmt {
@@ -317,6 +325,13 @@ impl From<Print> for Stmt {
     fn from(print: Print) -> Self {
         Self::Print(print)
     }
+}
+
+#[derive(Debug)]
+pub struct Block {
+    pub(crate) decls: Vec<Decl>,
+    #[allow(dead_code)]
+    pub(crate) span: Span,
 }
 
 #[derive(Debug)]

@@ -1,10 +1,11 @@
 use std::any::Any;
 use std::collections::hash_map::{Entry, HashMap};
 use std::fmt::Display;
+use std::ptr::NonNull;
 use std::rc::Rc;
 
 use crate::error::{IntoRuntimeError as _, RuntimeError};
-use crate::ir::{Atom, Cons, Decl, Expr, Literal, Operator, Print, Program, Stmt, Var};
+use crate::ir::{Atom, Block, Cons, Decl, Expr, Literal, Operator, Print, Program, Stmt, Var};
 use crate::span::Span;
 
 #[inline]
@@ -164,14 +165,26 @@ struct Binding {
     span: Span,
 }
 
-// TODO: variable scoping
 #[derive(Debug, Default)]
 struct Context {
     /// (global) bindings of variable names to their values
     bindings: HashMap<String, Binding>,
+    /// parent context (`None` indicates the global scope)
+    enclosing: Option<NonNull<Context>>,
 }
 
 impl Context {
+    /// ### Safety
+    ///
+    /// The caller must ensure that `&mut self` remains valid for the lifetime of the returned
+    /// scoped [Context].
+    unsafe fn scope(&mut self) -> Self {
+        Self {
+            bindings: HashMap::new(),
+            enclosing: NonNull::new(self as *mut Self),
+        }
+    }
+
     #[inline]
     fn define_var(&mut self, var: String, val: Option<Value>, span: Span) {
         self.bindings.insert(
@@ -184,16 +197,27 @@ impl Context {
     }
 
     /// Register new assignment `var := val` and return new `val`
-    fn assign(&mut self, var: String, val: Value, span: Span) -> Result<Value, RuntimeError> {
-        match self.bindings.entry(var) {
-            Entry::Occupied(mut entry) => {
-                let _ = entry.insert(Binding { val, span });
-                let Binding { val, .. } = entry.get();
-                // NOTE: objects are ref-counted, so this should be cheap
-                Ok(val.clone())
-            }
-            Entry::Vacant(entry) => {
-                Err(span.into_error(format!("Undefined variable '{}'.", entry.key())))
+    fn assign(&mut self, mut var: String, val: Value, span: Span) -> Result<Value, RuntimeError> {
+        let mut cx = self;
+        loop {
+            match cx.bindings.entry(var) {
+                Entry::Occupied(mut entry) => {
+                    let _ = entry.insert(Binding { val, span });
+                    let Binding { val, .. } = entry.get();
+                    // NOTE: objects are ref-counted, so this should be cheap
+                    break Ok(val.clone());
+                }
+                Entry::Vacant(entry) => {
+                    var = entry.into_key();
+
+                    let Some(mut enclosing) = cx.enclosing else {
+                        break Err(span.into_error(format!("Undefined variable '{var}'.")));
+                    };
+
+                    // SAFETY: Scope contexts are created from an exclusive reference to the parent
+                    // context, which remains valid until the block is fully interpreted.
+                    cx = unsafe { enclosing.as_mut() };
+                }
             }
         }
     }
@@ -202,9 +226,23 @@ impl Context {
     where
         V: AsRef<str> + Display,
     {
-        match self.bindings.get(var.as_ref()) {
-            Some(Binding { val, .. }) => Ok(val.clone()),
-            None => Err(span.into_error(format!("Undefined variable '{var}'."))),
+        let var = var.as_ref();
+        let mut cx = self;
+
+        loop {
+            match cx.bindings.get(var) {
+                Some(Binding { val, .. }) => break Ok(val.clone()),
+
+                None => {
+                    let Some(enclosing) = cx.enclosing else {
+                        break Err(span.into_error(format!("Undefined variable '{var}'.")));
+                    };
+
+                    // SAFETY: Scope contexts are created from an exclusive reference to the parent
+                    // context, which remains valid until the block is fully interpreted.
+                    cx = unsafe { enclosing.as_ref() };
+                }
+            }
         }
     }
 }
@@ -468,9 +506,21 @@ impl Interpret for Stmt {
     #[inline]
     fn interpret(self, cx: &mut Context) -> Result<(), RuntimeError> {
         match self {
+            Self::Block(block) => block.interpret(cx),
             Self::Expr(expr) => expr.evaluate(cx).map(|_| ()),
             Self::Print(print) => print.interpret(cx),
         }
+    }
+}
+
+impl Interpret for Block {
+    #[inline]
+    fn interpret(self, cx: &mut Context) -> Result<(), RuntimeError> {
+        // SAFETY: `local` remains valid for the remainder of this block's interpretation
+        let mut local = unsafe { cx.scope() };
+        self.decls
+            .into_iter()
+            .try_for_each(|decl| decl.interpret(&mut local))
     }
 }
 

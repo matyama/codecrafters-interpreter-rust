@@ -3,7 +3,7 @@ use std::iter::Peekable;
 use std::str::FromStr;
 
 use crate::error::SyntaxError;
-use crate::ir::{AssignTarget, Atom, Decl, Expr, Operator, Print, Program, Stmt, Var};
+use crate::ir::{AssignTarget, Atom, Block, Decl, Expr, Operator, Print, Program, Stmt, Var};
 use crate::lexer::{Lexer, TokenStream};
 use crate::span::Span;
 use crate::token::{Keyword, LexToken, Literal, Token};
@@ -54,7 +54,7 @@ macro_rules! rule {
 
     // models simple rule alternatives:
     //  - declaration → var_decl  | statement ;
-    //  - statement   → expr_stmt | print_stmt ;
+    //  - statement   → expr_stmt | print_stmt | block ;
     //  - expression  → assignment ;
     ($($head:ident -> $rule0:ident $(| $rule:ident)* ; # $t:ty)+) => {
         $(
@@ -170,6 +170,48 @@ macro_rules! rule {
             // parse ;
             span += self.semicolon()?;
             Ok(Some(Var { ident, expr, span }))
+        }
+    };
+
+    ($head:ident -> "{" $rule:ident* "}" ;) => {
+        fn $head(&mut self) -> Result<Option<Block>, SyntaxError> {
+            // attempt to match start of a block indicated by '{'
+            let Some(mut span) = self.left_brace()? else {
+                return Ok(None);
+            };
+
+            let mut decls = Vec::new();
+
+            loop {
+                let decl = match self.peek() {
+                    // stop when '}' is reached
+                    Ok(Ok(LexToken {
+                        token: Token::RightBrace,
+                        ..
+                    })) => break,
+
+                    // stop when EOF is reached
+                    Ok(Err(_)) => break,
+
+                    // propagate errors
+                    Err(_) => {
+                        let Err(error) = self.advance() else {
+                            unreachable!("peeked an error");
+                        };
+                        return Err(error);
+                    }
+
+                    // otherwise parse a (variable or statement) declaration
+                    _ => self.$rule()?,
+                };
+
+                decls.push(decl);
+            }
+
+            // consume closing '}' or fail if EOF was reached
+            span += self.right_brace()?;
+
+            Ok(Some(Block { decls, span }))
         }
     };
 
@@ -379,7 +421,62 @@ macro_rules! rule {
                 },
             }
         }
-    }
+    };
+
+    // matches an optional simple token (e.g., LeftBrace)
+    ($($head:ident ? $t:ident ;)+) => {
+        $(
+            fn $head(&mut self) -> Result<Option<Span>, SyntaxError> {
+                let Ok(next) = self.peek() else {
+                    let Err(error) = self.advance() else {
+                        unreachable!("peeked an error");
+                    };
+                    return Err(error);
+                };
+
+                let Ok(LexToken {
+                    token: Token::$t,
+                    span,
+                    ..
+                }) = next
+                else {
+                    return Ok(None);
+                };
+
+                let span = span.clone();
+                let _ = self.advance()?;
+                Ok(Some(span))
+            }
+        )+
+    };
+
+    // matches a mandatory simple token (e.g, Semicolon, RightBrace)
+    ($($head:ident ? $t:ident : $err:expr ;)+) => {
+        $(
+            fn $head(&mut self) -> Result<Span, SyntaxError> {
+                match self.advance()? {
+                    Ok(LexToken {
+                        token: Token::$t,
+                        span,
+                        ..
+                    }) => Ok(span.clone()),
+
+                    Ok(LexToken { lexeme, span, .. }) => {
+                        let span = span.clone();
+                        let loc = ErrLoc::at(lexeme);
+                        Err(self.error(span, $err, loc))
+                    }
+
+                    Err(lineno) => {
+                        // FIXME: proper span
+                        let mut span = Span::empty();
+                        span.lineno = lineno;
+                        Err(self.error(span, $err, ErrLoc::Eof))
+                    }
+                }
+            }
+        )+
+    };
 
 }
 
@@ -461,39 +558,18 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn semicolon(&mut self) -> Result<Span, SyntaxError> {
-        match self.advance()? {
-            Ok(LexToken {
-                token: Token::Semicolon,
-                span,
-                ..
-            }) => Ok(span.clone()),
-
-            Ok(LexToken { lexeme, span, .. }) => {
-                let span = span.clone();
-                let loc = ErrLoc::at(lexeme);
-                Err(self.error(span, "Expect ';' after statement.", loc))
-            }
-
-            Err(lineno) => {
-                // FIXME: proper span
-                let mut span = Span::empty();
-                span.lineno = lineno;
-                Err(self.error(span, "Expect ';' after statement.", ErrLoc::Eof))
-            }
-        }
-    }
-
     /// Parse a sequence of tokens according to the following grammar:
-    /// ```
+    /// ```text
     /// program        → declaration* EOF ;
     /// declaration    → var_decl
     ///                | statement ;
     /// var_decl       → "var" IDENTIFIER ( "=" expression )? ";" ;
     /// statement      → expr_stmt
-    ///                | print_stmt ;
+    ///                | print_stmt
+    ///                | block ;
     /// expr_stmt      → expression ";" ;
     /// print_stmt     → "print" expression ";" ;
+    /// block          → "{" declaration* "}" ;
     /// expression     → assignment ;
     /// assignment     → IDENTIFIER "=" assignment
     ///                | equality ;
@@ -513,7 +589,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a sequence of tokens according to the following grammar:
-    /// ```
+    /// ```text
     /// expression     → assignment ;
     /// assignment     → IDENTIFIER "=" assignment
     ///                | equality ;
@@ -537,9 +613,9 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        declaration -> statement | var_decl   ;                   #  Decl
-        statement   -> expr_stmt | print_stmt ;                   #  Stmt
-        expression  -> assignment ;                               #  Expr
+        declaration -> statement | var_decl           ;           #  Decl
+        statement   -> expr_stmt | print_stmt | block ;           #  Stmt
+        expression  -> assignment                     ;           #  Expr
     }
 
     rule! {
@@ -548,6 +624,10 @@ impl<'a> Parser<'a> {
 
     rule! {
         var_decl    -> "var" identifier ( "=" expression )? ";" ; #  Var
+    }
+
+    rule! {
+        block       -> "{" declaration* "}" ;
     }
 
     rule! {
@@ -571,6 +651,15 @@ impl<'a> Parser<'a> {
 
     rule! {
         primary     -> Num | Str | Ident | "true" | "false" | "nil" | ( expression ) ;
+    }
+
+    rule! {
+        left_brace  ? LeftBrace ;
+    }
+
+    rule! {
+        semicolon   ?  Semicolon  : "Expect ';' after statement." ;
+        right_brace ?  RightBrace : "Expect '}' ."     ;
     }
 }
 

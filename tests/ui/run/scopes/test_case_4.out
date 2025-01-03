@@ -1,0 +1,4 @@
+inner hello
+outer hello
+Undefined variable 'hello'.
+[line 9]
