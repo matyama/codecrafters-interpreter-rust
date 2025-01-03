@@ -1,0 +1,7 @@
+if (true) {
+  print "hello";
+} else if (true) print "hello";
+
+if (true) print "hello"; else if (true) {
+  print "hello";
+}

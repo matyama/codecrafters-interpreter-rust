@@ -1,0 +1,7 @@
+var age = 88;
+var stage = "unknown";
+if (age < 18) { stage = "child"; }
+else if (age >= 18) { stage = "adult"; }
+else if (age >= 65) { stage = "senior"; }
+else if (age >= 100) { stage = "centenarian"; }
+print stage;

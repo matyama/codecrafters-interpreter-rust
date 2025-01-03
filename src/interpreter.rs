@@ -6,7 +6,7 @@ use std::ptr::NonNull;
 use std::rc::Rc;
 
 use crate::error::{IntoRuntimeError as _, RuntimeError};
-use crate::ir::{Atom, Block, Cons, Decl, Expr, Literal, Operator, Print, Program, Stmt, Var};
+use crate::ir::{Atom, Block, Cons, Decl, Expr, If, Literal, Operator, Print, Program, Stmt, Var};
 use crate::span::Span;
 
 #[inline]
@@ -509,6 +509,7 @@ impl Interpret for Stmt {
     fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
         match self {
             Self::Block(block) => block.interpret(cx, writer),
+            Self::If(if_stmt) => if_stmt.interpret(cx, writer),
             Self::Expr(expr) => expr.evaluate(cx).map(|_| ()),
             Self::Print(print) => print.interpret(cx, writer),
         }
@@ -523,6 +524,20 @@ impl Interpret for Block {
         self.decls
             .into_iter()
             .try_for_each(|decl| decl.interpret(&mut local, writer))
+    }
+}
+
+impl Interpret for If {
+    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+        let cond = self.cond.evaluate(cx)?;
+
+        if cond.into_bool() {
+            self.then_branch.interpret(cx, writer)?;
+        } else if let Some(else_branch) = self.else_branch {
+            else_branch.interpret(cx, writer)?;
+        }
+
+        Ok(())
     }
 }
 

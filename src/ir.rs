@@ -302,14 +302,34 @@ pub struct Var {
 #[derive(Debug)]
 pub enum Stmt {
     Block(Block),
+    If(If),
     Expr(Expr),
     Print(Print),
+}
+
+impl Stmt {
+    #[inline]
+    pub fn span(&self) -> &Span {
+        match self {
+            Self::Block(Block { span, .. }) => span,
+            Self::If(If { span, .. }) => span,
+            Self::Expr(expr) => expr.span(),
+            Self::Print(Print { span, .. }) => span,
+        }
+    }
 }
 
 impl From<Block> for Stmt {
     #[inline]
     fn from(block: Block) -> Self {
         Self::Block(block)
+    }
+}
+
+impl From<If> for Stmt {
+    #[inline]
+    fn from(if_stmt: If) -> Self {
+        Self::If(if_stmt)
     }
 }
 
@@ -330,14 +350,20 @@ impl From<Print> for Stmt {
 #[derive(Debug)]
 pub struct Block {
     pub(crate) decls: Vec<Decl>,
-    #[allow(dead_code)]
+    pub(crate) span: Span,
+}
+
+#[derive(Debug)]
+pub struct If {
+    pub(crate) cond: Expr,
+    pub(crate) then_branch: Box<Stmt>,
+    pub(crate) else_branch: Option<Box<Stmt>>,
     pub(crate) span: Span,
 }
 
 #[derive(Debug)]
 pub struct Print {
     pub(crate) expr: Expr,
-    #[allow(dead_code)]
     pub(crate) span: Span,
 }
 

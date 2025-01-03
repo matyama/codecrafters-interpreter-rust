@@ -3,7 +3,7 @@ use std::iter::Peekable;
 use std::str::FromStr;
 
 use crate::error::SyntaxError;
-use crate::ir::{AssignTarget, Atom, Block, Decl, Expr, Operator, Print, Program, Stmt, Var};
+use crate::ir::{AssignTarget, Atom, Block, Decl, Expr, If, Operator, Print, Program, Stmt, Var};
 use crate::lexer::{Lexer, TokenStream};
 use crate::span::Span;
 use crate::token::{Keyword, LexToken, Literal, Token};
@@ -173,6 +173,7 @@ macro_rules! rule {
         }
     };
 
+    // models block → "{" declaration* "}" ;
     ($head:ident -> "{" $rule:ident* "}" ;) => {
         fn $head(&mut self) -> Result<Option<Block>, SyntaxError> {
             // attempt to match start of a block indicated by '{'
@@ -212,6 +213,40 @@ macro_rules! rule {
             span += self.right_brace()?;
 
             Ok(Some(Block { decls, span }))
+        }
+    };
+
+    // matches "if" "(" expression ")" statement ( "else" statement )? ;
+    ($head:ident -> "if" "(" $cond:ident ")" $then:ident ( "else" $else:ident )? ;) => {
+        fn $head(&mut self) -> Result<Option<If>, SyntaxError> {
+            let Some(mut span) = self.if_keyword()? else {
+                return Ok(None);
+            };
+
+            span += self.left_paren()?;
+
+            let cond = self.$cond()?;
+            span += cond.span();
+
+            span += self.right_paren()?;
+
+            let then_branch = self.$then().map(Box::new)?;
+            span += then_branch.span();
+
+            let else_branch = if self.else_keyword()?.is_some() {
+                let else_branch = self.$else().map(Box::new)?;
+                span += else_branch.span();
+                Some(else_branch)
+            } else {
+                None
+            };
+
+            Ok(Some(If {
+                cond,
+                then_branch,
+                else_branch,
+                span,
+            }))
         }
     };
 
@@ -423,8 +458,8 @@ macro_rules! rule {
         }
     };
 
-    // matches an optional simple token (e.g., LeftBrace)
-    ($($head:ident ? $t:ident ;)+) => {
+    // matches an optional simple token or keyword (e.g., LeftBrace)
+    ($($head:ident ? $t:ident$(($kw:ident))? ;)+) => {
         $(
             fn $head(&mut self) -> Result<Option<Span>, SyntaxError> {
                 let Ok(next) = self.peek() else {
@@ -435,7 +470,7 @@ macro_rules! rule {
                 };
 
                 let Ok(LexToken {
-                    token: Token::$t,
+                    token: Token::$t$((Keyword::$kw))?,
                     span,
                     ..
                 }) = next
@@ -450,13 +485,13 @@ macro_rules! rule {
         )+
     };
 
-    // matches a mandatory simple token (e.g, Semicolon, RightBrace)
-    ($($head:ident ? $t:ident : $err:expr ;)+) => {
+    // matches a mandatory simple token or keyword (e.g, Semicolon, RightBrace)
+    ($($head:ident ? $t:ident$(($kw:ident))? : $err:expr ;)+) => {
         $(
             fn $head(&mut self) -> Result<Span, SyntaxError> {
                 match self.advance()? {
                     Ok(LexToken {
-                        token: Token::$t,
+                        token: Token::$t$((Keyword::$kw))?,
                         span,
                         ..
                     }) => Ok(span.clone()),
@@ -477,7 +512,6 @@ macro_rules! rule {
             }
         )+
     };
-
 }
 
 // NOTE: Unfortunately one cannot access the iterator inside Peekable, so
@@ -565,9 +599,11 @@ impl<'a> Parser<'a> {
     ///                | statement ;
     /// var_decl       → "var" IDENTIFIER ( "=" expression )? ";" ;
     /// statement      → expr_stmt
+    ///                | if_stmt
     ///                | print_stmt
     ///                | block ;
     /// expr_stmt      → expression ";" ;
+    /// if_stmt        → "if" "(" expression ")" statement ( "else" statement )? ;
     /// print_stmt     → "print" expression ";" ;
     /// block          → "{" declaration* "}" ;
     /// expression     → assignment ;
@@ -613,9 +649,9 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        declaration -> statement | var_decl           ;           #  Decl
-        statement   -> expr_stmt | print_stmt | block ;           #  Stmt
-        expression  -> assignment                     ;           #  Expr
+        declaration -> statement | var_decl ;                     #  Decl
+        statement   -> expr_stmt | if_stmt | print_stmt | block ; #  Stmt
+        expression  -> assignment ;                               #  Expr
     }
 
     rule! {
@@ -628,6 +664,10 @@ impl<'a> Parser<'a> {
 
     rule! {
         block       -> "{" declaration* "}" ;
+    }
+
+    rule! {
+        if_stmt     -> "if" "(" expression ")" statement ( "else" statement )? ;
     }
 
     rule! {
@@ -654,12 +694,16 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        left_brace  ? LeftBrace ;
+        left_brace    ? LeftBrace ;
+        if_keyword    ? Keyword(If) ;
+        else_keyword  ? Keyword(Else) ;
     }
 
     rule! {
-        semicolon   ?  Semicolon  : "Expect ';' after statement." ;
-        right_brace ?  RightBrace : "Expect '}' ."     ;
+        semicolon     ? Semicolon  : "Expect ';' after statement." ;
+        left_paren    ? LeftParen  : "Expect '(' after 'if'." ;
+        right_paren   ? RightParen : "Expect ')' after if condition." ;
+        right_brace   ? RightBrace : "Expect '}' ." ;
     }
 }
 
