@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::hash_map::{Entry, HashMap};
 use std::fmt::Display;
+use std::io::Write;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
@@ -15,9 +16,9 @@ pub fn evaluate(expr: Expr) -> Result<Value, RuntimeError> {
 }
 
 #[inline]
-pub fn interpret(prog: Program) -> Result<(), RuntimeError> {
+pub fn interpret<W: Write>(prog: Program, writer: &mut W) -> Result<(), RuntimeError> {
     let mut cx = Context::default();
-    prog.interpret(&mut cx)
+    prog.interpret(&mut cx, writer)
 }
 
 // TODO: GC with tracing to collect cyclic object graphs
@@ -474,28 +475,29 @@ impl Evaluate for Cons {
 }
 
 trait Interpret {
-    fn interpret(self, cx: &mut Context) -> Result<(), RuntimeError>;
+    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError>;
 }
 
 impl Interpret for Program {
     #[inline]
-    fn interpret(self, cx: &mut Context) -> Result<(), RuntimeError> {
-        self.into_iter().try_for_each(|decl| decl.interpret(cx))
+    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+        self.into_iter()
+            .try_for_each(|decl| decl.interpret(cx, writer))
     }
 }
 
 impl Interpret for Decl {
     #[inline]
-    fn interpret(self, cx: &mut Context) -> Result<(), RuntimeError> {
+    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
         match self {
-            Self::Var(var) => var.interpret(cx),
-            Self::Stmt(stmt) => stmt.interpret(cx),
+            Self::Var(var) => var.interpret(cx, writer),
+            Self::Stmt(stmt) => stmt.interpret(cx, writer),
         }
     }
 }
 
 impl Interpret for Var {
-    fn interpret(self, cx: &mut Context) -> Result<(), RuntimeError> {
+    fn interpret<W: Write>(self, cx: &mut Context, _writer: &mut W) -> Result<(), RuntimeError> {
         let value = self.expr.map(|expr| expr.evaluate(cx)).transpose()?;
         cx.define_var(self.ident, value, self.span);
         Ok(())
@@ -504,30 +506,52 @@ impl Interpret for Var {
 
 impl Interpret for Stmt {
     #[inline]
-    fn interpret(self, cx: &mut Context) -> Result<(), RuntimeError> {
+    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
         match self {
-            Self::Block(block) => block.interpret(cx),
+            Self::Block(block) => block.interpret(cx, writer),
             Self::Expr(expr) => expr.evaluate(cx).map(|_| ()),
-            Self::Print(print) => print.interpret(cx),
+            Self::Print(print) => print.interpret(cx, writer),
         }
     }
 }
 
 impl Interpret for Block {
     #[inline]
-    fn interpret(self, cx: &mut Context) -> Result<(), RuntimeError> {
+    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
         // SAFETY: `local` remains valid for the remainder of this block's interpretation
         let mut local = unsafe { cx.scope() };
         self.decls
             .into_iter()
-            .try_for_each(|decl| decl.interpret(&mut local))
+            .try_for_each(|decl| decl.interpret(&mut local, writer))
     }
 }
 
 impl Interpret for Print {
-    fn interpret(self, cx: &mut Context) -> Result<(), RuntimeError> {
+    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
         let value = self.expr.evaluate(cx)?;
-        println!("{value}");
-        Ok(())
+        writeln!(writer, "{value}").map_err(move |error| self.span.into_error(error))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::io::BufWriter;
+
+    #[test]
+    fn scoped_blocks() {
+        let input = include_str!("../tests/ui/run/scopes/test_case_0.lox");
+        let expected = include_str!("../tests/ui/run/scopes/test_case_0.out");
+
+        let mut writer = BufWriter::new(Vec::new());
+
+        let program = input.parse().expect("valid program");
+        interpret(program, &mut writer).expect("no runtime error");
+
+        let buf = writer.into_inner().expect("failed to flush");
+        let actual = String::from_utf8(buf).expect("UTF-8 interpreter output");
+
+        assert_eq!(expected, actual);
     }
 }

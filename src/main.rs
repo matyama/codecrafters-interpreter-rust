@@ -8,6 +8,7 @@ mod token;
 
 use std::env;
 use std::fs;
+use std::io::{self, BufWriter, Write as _};
 use std::path::Path;
 use std::process::{ExitCode, Termination};
 
@@ -101,7 +102,17 @@ fn main() -> impl Termination {
                 }
             };
 
-            if let Err(error) = interpreter::interpret(prog) {
+            let stdout = io::stdout().lock();
+            let mut writer = BufWriter::new(stdout);
+
+            let result = interpreter::interpret(prog, &mut writer);
+
+            if let Err(error) = writer.flush() {
+                eprintln!("{error}");
+                return ExitCode::FAILURE;
+            }
+
+            if let Err(error) = result {
                 eprintln!("{error}");
                 error.report()
             } else {
