@@ -227,6 +227,33 @@ impl Add<Span> for Expr {
     }
 }
 
+/// [Expr]ession wrapper indicating a valid *r-value* (i.e, assignment target)
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct AssignTarget(Expr);
+
+impl TryFrom<Expr> for AssignTarget {
+    type Error = Expr;
+
+    fn try_from(expr: Expr) -> Result<Self, Self::Error> {
+        // TODO: support other kinds of assignment targets than just a variable identifier
+        match expr {
+            var @ Expr::Atom(Atom {
+                literal: Literal::Var(_),
+                ..
+            }) => Ok(AssignTarget(var)),
+            expr => Err(expr),
+        }
+    }
+}
+
+impl From<AssignTarget> for Expr {
+    #[inline]
+    fn from(AssignTarget(expr): AssignTarget) -> Self {
+        expr
+    }
+}
+
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct Program(pub(crate) Vec<Decl>);

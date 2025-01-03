@@ -3,7 +3,7 @@ use std::iter::Peekable;
 use std::str::FromStr;
 
 use crate::error::SyntaxError;
-use crate::ir::{Atom, Decl, Expr, Operator, Print, Program, Stmt, Var};
+use crate::ir::{AssignTarget, Atom, Decl, Expr, Operator, Print, Program, Stmt, Var};
 use crate::lexer::{Lexer, TokenStream};
 use crate::span::Span;
 use crate::token::{Keyword, LexToken, Literal, Token};
@@ -55,7 +55,7 @@ macro_rules! rule {
     // models simple rule alternatives:
     //  - declaration → var_decl  | statement ;
     //  - statement   → expr_stmt | print_stmt ;
-    //  - expression  → equality ;
+    //  - expression  → assignment ;
     ($($head:ident -> $rule0:ident $(| $rule:ident)* ; # $t:ty)+) => {
         $(
             fn $head(&mut self) -> Result<$t, SyntaxError> {
@@ -67,6 +67,53 @@ macro_rules! rule {
                 self.$rule0().map(<$t>::from)
             }
         )+
+    };
+
+    // models assignment → IDENTIFIER "=" assignment | equality ;
+    ($head:ident -> IDENTIFIER "=" $rval:ident | $lval:ident ;) => {
+        fn $head(&mut self) -> Result<Expr, SyntaxError> {
+            let expr = self.$lval()?;
+
+            // try to match an assignment operator (=)
+            let Ok(next) = self.peek() else {
+                let Err(error) = self.advance() else {
+                    unreachable!("peeked an error");
+                };
+                return Err(error);
+            };
+
+            if let Ok(LexToken {
+                token: Token::Equal,
+                ..
+            }) = next
+            {
+                let Ok(Ok(LexToken {
+                    lexeme,
+                    span: eq_span,
+                    ..
+                })) = self.advance()
+                else {
+                    unreachable!("peeked a token");
+                };
+
+                // ensure there's a valid assignment target before the operator
+                return match AssignTarget::try_from(expr) {
+                    Ok(target) => {
+                        let lval = Expr::from(target);
+                        let rval = self.$rval()?;
+                        let span = lval.span() + rval.span();
+                        Ok(Expr::binary(Operator::Equal, lval, rval, span))
+                    }
+                    Err(expr) => {
+                        let span = expr.span() + eq_span;
+                        let loc = ErrLoc::at(lexeme);
+                        Err(self.error(span, "Invalid assignment target.", loc))
+                    }
+                };
+            }
+
+            Ok(expr)
+        }
     };
 
     // models var_decl → "var" IDENTIFIER ( "=" expression )? ";" ;
@@ -447,7 +494,9 @@ impl<'a> Parser<'a> {
     ///                | print_stmt ;
     /// expr_stmt      → expression ";" ;
     /// print_stmt     → "print" expression ";" ;
-    /// expression     → equality ;
+    /// expression     → assignment ;
+    /// assignment     → IDENTIFIER "=" assignment
+    ///                | equality ;
     /// equality       → comparison ( ( "!=" | "==" ) comparison )* ;
     /// comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
     /// term           → factor ( ( "-" | "+" ) factor )* ;
@@ -465,7 +514,9 @@ impl<'a> Parser<'a> {
 
     /// Parse a sequence of tokens according to the following grammar:
     /// ```
-    /// expression     → equality ;
+    /// expression     → assignment ;
+    /// assignment     → IDENTIFIER "=" assignment
+    ///                | equality ;
     /// equality       → comparison ( ( "!=" | "==" ) comparison )* ;
     /// comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
     /// term           → factor ( ( "-" | "+" ) factor )* ;
@@ -488,7 +539,11 @@ impl<'a> Parser<'a> {
     rule! {
         declaration -> statement | var_decl   ;                   #  Decl
         statement   -> expr_stmt | print_stmt ;                   #  Stmt
-        expression  -> equality ;                                 #  Expr
+        expression  -> assignment ;                               #  Expr
+    }
+
+    rule! {
+        assignment  -> IDENTIFIER "=" assignment | equality ;
     }
 
     rule! {

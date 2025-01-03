@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::hash_map::{Entry, HashMap};
 use std::fmt::Display;
 use std::rc::Rc;
 
@@ -70,26 +70,20 @@ impl Display for Object {
 
 impl PartialEq for Object {
     fn eq(&self, other: &Self) -> bool {
-        let lhs = self.0.downcast_ref::<String>();
-        let rhs = other.0.downcast_ref::<String>();
+        macro_rules! try_eq {
+            ($t:ty) => {
+                let lhs = self.0.downcast_ref::<$t>();
+                let rhs = other.0.downcast_ref::<$t>();
 
-        if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
-            return lhs == rhs;
+                if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
+                    return lhs == rhs;
+                }
+            };
         }
 
-        let lhs = self.0.downcast_ref::<f64>();
-        let rhs = other.0.downcast_ref::<f64>();
-
-        if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
-            return lhs == rhs;
-        }
-
-        let lhs = self.0.downcast_ref::<bool>();
-        let rhs = other.0.downcast_ref::<bool>();
-
-        if let (Some(lhs), Some(rhs)) = (lhs, rhs) {
-            return lhs == rhs;
-        }
+        try_eq!(String);
+        try_eq!(f64);
+        try_eq!(bool);
 
         false
     }
@@ -189,6 +183,21 @@ impl Context {
         );
     }
 
+    /// Register new assignment `var := val` and return new `val`
+    fn assign(&mut self, var: String, val: Value, span: Span) -> Result<Value, RuntimeError> {
+        match self.bindings.entry(var) {
+            Entry::Occupied(mut entry) => {
+                let _ = entry.insert(Binding { val, span });
+                let Binding { val, .. } = entry.get();
+                // NOTE: objects are ref-counted, so this should be cheap
+                Ok(val.clone())
+            }
+            Entry::Vacant(entry) => {
+                Err(span.into_error(format!("Undefined variable '{}'.", entry.key())))
+            }
+        }
+    }
+
     fn get_val<V>(&self, var: V, span: Span) -> Result<Value, RuntimeError>
     where
         V: AsRef<str> + Display,
@@ -235,6 +244,31 @@ impl Evaluate for Cons {
         };
 
         match self.op {
+            Operator::Equal => {
+                let Some((lhs, rhs)) = binary_args(self.args) else {
+                    return Err(self
+                        .span
+                        .into_error("Operands must be l-value and r-value."));
+                };
+
+                // TODO: generalize to regions/places/locations where values can be assigned to
+                let Expr::Atom(Atom {
+                    literal: Literal::Var(var),
+                    ..
+                }) = lhs
+                else {
+                    return Err(self
+                        .span
+                        .into_error("Operands must be l-value and r-value."));
+                };
+
+                let val = rhs.evaluate(cx)?;
+
+                // NOTE: assignment evaluates to the expression (rhs) value
+                //  - This is for cases such as `var a = b = 1;`
+                cx.assign(var, val, self.span)
+            }
+
             Operator::Bang => match self.args.pop() {
                 Some(rhs) => {
                     let value = rhs.evaluate(cx)?;
@@ -397,8 +431,6 @@ impl Evaluate for Cons {
                 Some(expr) => expr.evaluate(cx),
                 None => Err(self.span.into_error("Operand must be an expression.")),
             },
-
-            op => unimplemented!("interpret {op:?}"),
         }
     }
 }

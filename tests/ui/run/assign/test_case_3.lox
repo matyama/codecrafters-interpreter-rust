@@ -1,0 +1,6 @@
+var quz;
+var hello;
+
+quz = hello = 16 + 34 * 92;
+print quz;
+print hello;

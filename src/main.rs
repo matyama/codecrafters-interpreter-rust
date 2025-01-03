@@ -95,7 +95,10 @@ fn main() -> impl Termination {
 
             let prog = match source.parse::<Program>() {
                 Ok(prog) => prog,
-                Err(error) => return error.report(),
+                Err(error) => {
+                    eprintln!("{error}");
+                    return error.report();
+                }
             };
 
             if let Err(error) = interpreter::interpret(prog) {
