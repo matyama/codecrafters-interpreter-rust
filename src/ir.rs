@@ -273,6 +273,16 @@ pub enum Decl {
     Stmt(Stmt),
 }
 
+impl Decl {
+    #[inline]
+    pub fn span(&self) -> &Span {
+        match self {
+            Self::Var(Var { span, .. }) => span,
+            Self::Stmt(stmt) => stmt.span(),
+        }
+    }
+}
+
 impl From<Var> for Decl {
     #[inline]
     fn from(var: Var) -> Self {
@@ -293,7 +303,6 @@ pub struct Var {
     // TODO: more efficient variable representation
     pub ident: String,
     pub expr: Option<Expr>,
-    #[allow(dead_code)]
     pub span: Span,
 }
 
@@ -372,7 +381,7 @@ pub struct If {
 #[derive(Debug)]
 pub struct While {
     pub(crate) cond: Expr,
-    pub(crate) body: Rc<Stmt>,
+    pub(crate) body: Box<Stmt>,
     pub(crate) span: Span,
 }
 

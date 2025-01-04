@@ -1,11 +1,10 @@
 use std::borrow::Cow;
 use std::iter::Peekable;
-use std::rc::Rc;
 use std::str::FromStr;
 
 use crate::error::SyntaxError;
 use crate::ir::{
-    AssignTarget, Atom, Block, Decl, Expr, If, Operator, Print, Program, Stmt, Var, While,
+    self, AssignTarget, Atom, Block, Decl, Expr, If, Operator, Print, Program, Stmt, Var, While,
 };
 use crate::lexer::{Lexer, TokenStream};
 use crate::span::Span;
@@ -180,7 +179,7 @@ macro_rules! rule {
     ($head:ident -> "{" $rule:ident* "}" ;) => {
         fn $head(&mut self) -> Result<Option<Block>, SyntaxError> {
             // attempt to match start of a block indicated by '{'
-            let Some(mut span) = self.left_brace()? else {
+            let Some(mut span) = self.left_brace_token()? else {
                 return Ok(None);
             };
 
@@ -267,7 +266,7 @@ macro_rules! rule {
 
             span += self.right_paren("after condition")?;
 
-            let body = self.$body().map(Rc::new)?;
+            let body = self.$body().map(Box::new)?;
             span += body.span();
 
             Ok(Some(While {
@@ -275,6 +274,85 @@ macro_rules! rule {
                 body,
                 span,
             }))
+        }
+    };
+
+    // models: for_stmt → "for" "(" ( var_decl | expr_stmt | ";" ) expression? ";" expression? ")"
+    //         statement ;
+    // desugar: `for (<init>; <cond>; <inc>) <body>` -> `<init>; while (<cond>) { <body>; <inc> }`
+    (
+        $head:ident ->
+        "for" "(" ( $var_decl:ident | $expr_stmt:ident | ";" ) $cond:ident? ";" $inc:ident? ")"
+        $body:ident ;
+    ) => {
+        fn $head(&mut self) -> Result<Option<Stmt>, SyntaxError> {
+            let Some(mut span) = self.for_keyword()? else {
+                return Ok(None);
+            };
+
+            span += self.left_paren("after 'for'")?;
+
+            let mut initializer = None;
+
+            if let Some(s) = self.semicolon_token()? {
+                span += s;
+            } else if let Some(var) = self.$var_decl()? {
+                span += &var.span;
+                initializer = Some(Decl::Var(var));
+            } else {
+                let expr = self.$expr_stmt()?;
+                span += expr.span();
+                initializer = Some(Decl::Stmt(Stmt::Expr(expr)));
+            }
+
+            let cond = if let Some(s) = self.semicolon_token()? {
+                span += &s;
+                Expr::Atom(Atom {
+                    literal: ir::Literal::Bool(true),
+                    span: s,
+                })
+            } else {
+                let cond = self.$cond()?;
+                span += self.semicolon("after loop condition")?;
+                cond
+            };
+
+            let increment = if let Some(s) = self.right_paren_token()? {
+                span += s;
+                None
+            } else {
+                let inc = self.$inc()?;
+                span += self.right_paren("after for clauses")?;
+                Some(inc)
+            };
+
+            let body = self.$body()?;
+
+            let body = if let Some(increment) = increment {
+                let span = body.span() + increment.span();
+                let decls = vec![Decl::Stmt(body), Decl::Stmt(Stmt::Expr(increment))];
+                Stmt::Block(Block { decls, span })
+            } else {
+                body
+            };
+
+            span += body.span();
+
+            let body = Stmt::While(While {
+                cond,
+                body: Box::new(body),
+                span,
+            });
+
+            let stmt = if let Some(initializer) = initializer {
+                let span = initializer.span() + body.span();
+                let decls = vec![initializer, Decl::Stmt(body)];
+                Stmt::Block(Block { decls, span })
+            } else {
+                body
+            };
+
+            Ok(Some(stmt))
         }
     };
 
@@ -639,11 +717,15 @@ impl<'a> Parser<'a> {
     /// var_decl       → "var" IDENTIFIER ( "=" expression )? ";" ;
     /// statement      → expr_stmt
     ///                | if_stmt
+    ///                | while_stmt
+    ///                | for_stmt
     ///                | print_stmt
     ///                | block ;
     /// expr_stmt      → expression ";" ;
     /// if_stmt        → "if" "(" expression ")" statement ( "else" statement )? ;
     /// while_stmt     → "while" "(" expression ")" statement ;
+    /// for_stmt       → "for" "(" ( var_decl | expr_stmt | ";" ) expression? ";" expression? ")"
+    ///                  statement ;
     /// print_stmt     → "print" expression ";" ;
     /// block          → "{" declaration* "}" ;
     /// expression     → assignment ;
@@ -693,9 +775,9 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        declaration -> statement | var_decl ;                                  #  Decl
-        statement   -> expr_stmt | if_stmt | while_stmt | print_stmt | block ; #  Stmt
-        expression  -> assignment ;                                            #  Expr
+        declaration -> statement | var_decl ;                                             #  Decl
+        statement   -> expr_stmt | if_stmt | while_stmt | for_stmt | print_stmt | block ; #  Stmt
+        expression  -> assignment ;                                                       #  Expr
     }
 
     rule! {
@@ -716,6 +798,11 @@ impl<'a> Parser<'a> {
 
     rule! {
         while_stmt  -> "while" "(" expression ")" statement ;
+    }
+
+    rule! {
+        for_stmt    -> "for" "(" ( var_decl | expr_stmt | ";" ) expression? ";" expression? ")"
+                       statement ;
     }
 
     rule! {
@@ -744,10 +831,13 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        left_brace?    LeftBrace ;
-        if_keyword?    Keyword(If) ;
-        else_keyword?  Keyword(Else) ;
-        while_keyword? Keyword(While) ;
+        semicolon_token?      Semicolon ;
+        right_paren_token?    RightParen ;
+        left_brace_token?     LeftBrace ;
+        if_keyword?           Keyword(If) ;
+        else_keyword?         Keyword(Else) ;
+        while_keyword?        Keyword(While) ;
+        for_keyword?          Keyword(For) ;
     }
 
     rule! {
