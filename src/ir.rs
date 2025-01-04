@@ -2,7 +2,7 @@ use std::fmt::Display;
 use std::ops::Add;
 
 use crate::span::Span;
-use crate::token::{LexToken, Token};
+use crate::token::{Keyword, LexToken, Token};
 
 /// Atomic expression (literal values and variables)
 #[derive(Default, Clone, Debug)]
@@ -83,7 +83,9 @@ pub enum Operator {
     Star,
     Slash,
 
-    // unary operators
+    // logic operators
+    And,
+    Or,
     Bang,
 
     // relational operators
@@ -106,6 +108,8 @@ impl Display for Operator {
             Self::Minus => f.write_str("-"),
             Self::Star => f.write_str("*"),
             Self::Slash => f.write_str("/"),
+            Self::And => f.write_str("and"),
+            Self::Or => f.write_str("or"),
             Self::Bang => f.write_str("!"),
             Self::BangEqual => f.write_str("!="),
             Self::Equal => f.write_str("="),
@@ -126,6 +130,8 @@ impl From<&Token<'_>> for Option<Operator> {
             Token::Minus => Some(Operator::Minus),
             Token::Star => Some(Operator::Star),
             Token::Slash => Some(Operator::Slash),
+            Token::Keyword(Keyword::And) => Some(Operator::And),
+            Token::Keyword(Keyword::Or) => Some(Operator::Or),
             Token::Bang => Some(Operator::Bang),
             Token::BangEqual => Some(Operator::BangEqual),
             Token::Equal => Some(Operator::Equal),

@@ -107,14 +107,6 @@ impl Value {
         Self::Object(Object::new(obj))
     }
 
-    /// Implements Ruby's rule: `false` and `nil` are false and everything else is true
-    fn into_bool(self) -> bool {
-        match self {
-            Self::Object(Object(obj)) => obj.downcast_ref::<bool>().map_or(true, |b| *b),
-            Self::Nil => false,
-        }
-    }
-
     pub fn map<T: 'static>(self, f: impl FnOnce(&T) -> T) -> Result<Self, Self> {
         match self {
             Self::Object(obj) => obj.map::<T>(f).map(Self::Object).map_err(Self::Object),
@@ -156,6 +148,23 @@ impl Display for Value {
             Self::Object(obj) => obj.fmt(f),
             Self::Nil => write!(f, "nil"),
         }
+    }
+}
+
+impl From<&Value> for bool {
+    /// Implements Ruby's rule: `false` and `nil` are false and everything else is true
+    fn from(value: &Value) -> Self {
+        match value {
+            Value::Object(Object(obj)) => obj.downcast_ref::<bool>().map_or(true, |b| *b),
+            Value::Nil => false,
+        }
+    }
+}
+
+impl From<Value> for bool {
+    #[inline]
+    fn from(value: Value) -> Self {
+        Self::from(&value)
     }
 }
 
@@ -311,10 +320,38 @@ impl Evaluate for Cons {
             Operator::Bang => match self.args.pop() {
                 Some(rhs) => {
                     let value = rhs.evaluate(cx)?;
-                    Ok(Value::obj(!value.into_bool()))
+                    Ok(Value::obj(!bool::from(value)))
                 }
                 None => Err(self.span.into_error("Operand must be an expression.")),
             },
+
+            Operator::And => {
+                let Some((lhs, rhs)) = binary_args(self.args) else {
+                    return Err(self.span.into_error("Operands must be two expressions."));
+                };
+
+                let lhs = lhs.evaluate(cx)?;
+
+                if bool::from(&lhs) {
+                    rhs.evaluate(cx)
+                } else {
+                    Ok(lhs)
+                }
+            }
+
+            Operator::Or => {
+                let Some((lhs, rhs)) = binary_args(self.args) else {
+                    return Err(self.span.into_error("Operands must be two expressions."));
+                };
+
+                let lhs = lhs.evaluate(cx)?;
+
+                if bool::from(&lhs) {
+                    Ok(lhs)
+                } else {
+                    rhs.evaluate(cx)
+                }
+            }
 
             Operator::Plus => {
                 let Some((lhs, rhs)) = binary_args(self.args) else {
@@ -531,7 +568,7 @@ impl Interpret for If {
     fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
         let cond = self.cond.evaluate(cx)?;
 
-        if cond.into_bool() {
+        if cond.into() {
             self.then_branch.interpret(cx, writer)?;
         } else if let Some(else_branch) = self.else_branch {
             else_branch.interpret(cx, writer)?;
@@ -556,8 +593,8 @@ mod tests {
 
     #[test]
     fn scoped_blocks() {
-        let input = include_str!("../tests/ui/run/scopes/test_case_0.lox");
-        let expected = include_str!("../tests/ui/run/scopes/test_case_0.out");
+        let input = include_str!("../tests/ui/run/scopes/test_case_1.lox");
+        let expected = include_str!("../tests/ui/run/scopes/test_case_1.out");
 
         let mut writer = BufWriter::new(Vec::new());
 

@@ -296,8 +296,14 @@ macro_rules! rule {
         )+
     };
 
-    // models: equality → comparison ( ( "!=" | "==" ) comparison )* ;
-    ($($head:ident -> $lhs:ident (($ty0:ident $(| $ty:ident)*) $rhs:ident)$_:tt ;)+) => {
+    // models:
+    //  - logic_or  → logic_and ( "or" logic_and )* ;
+    //  - logic_and → equality ( "and" equality )* ;
+    //  - equality  → comparison ( ( "!=" | "==" ) comparison )* ;
+    ($(
+        $head:ident ->
+        $lhs:ident (($t0:ident$(($k0:ident))? $(| $t:ident$(($k:ident))?)*) $rhs:ident)* ;
+    )+) => {
         $(
             fn $head(&mut self) -> Result<Expr, SyntaxError> {
                 let mut expr = self.$lhs()?;
@@ -311,7 +317,7 @@ macro_rules! rule {
                     };
 
                     let Ok(LexToken {
-                        token: Token::$ty0 $(| Token::$ty)*,
+                        token: Token::$t0$((Keyword::$k0))? $(| Token::$t$((Keyword::$k))?)*,
                         ..
                     }) = next else {
                         break Ok(expr);
@@ -608,7 +614,9 @@ impl<'a> Parser<'a> {
     /// block          → "{" declaration* "}" ;
     /// expression     → assignment ;
     /// assignment     → IDENTIFIER "=" assignment
-    ///                | equality ;
+    ///                | logic_or ;
+    /// logic_or       → logic_and ( "or" logic_and )* ;
+    /// logic_and      → equality ( "and" equality )* ;
     /// equality       → comparison ( ( "!=" | "==" ) comparison )* ;
     /// comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
     /// term           → factor ( ( "-" | "+" ) factor )* ;
@@ -628,7 +636,9 @@ impl<'a> Parser<'a> {
     /// ```text
     /// expression     → assignment ;
     /// assignment     → IDENTIFIER "=" assignment
-    ///                | equality ;
+    ///                | logic_or ;
+    /// logic_or       → logic_and ( "or" logic_and )* ;
+    /// logic_and      → equality ( "and" equality )* ;
     /// equality       → comparison ( ( "!=" | "==" ) comparison )* ;
     /// comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
     /// term           → factor ( ( "-" | "+" ) factor )* ;
@@ -655,7 +665,7 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        assignment  -> IDENTIFIER "=" assignment | equality ;
+        assignment  -> IDENTIFIER "=" assignment | logic_or ;
     }
 
     rule! {
@@ -679,6 +689,8 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
+        logic_or    -> logic_and ( (Keyword(Or))  logic_and )* ;
+        logic_and   -> equality  ( (Keyword(And)) equality  )* ;
         equality    -> comparison ( (BangEqual | EqualEqual) comparison)* ;
         comparison  -> term ( (Greater | GreaterEqual | Less | LessEqual) term )* ;
         term        -> factor ( (Minus | Plus) factor)* ;
