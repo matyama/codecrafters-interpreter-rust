@@ -1,17 +1,19 @@
 use std::fmt::Display;
 use std::ops::Add;
+use std::rc::Rc;
 
 use crate::span::Span;
 use crate::token::{Keyword, LexToken, Token};
 
+// TODO: find a better story for representing strings (and var identifiers)
 /// Atomic expression (literal values and variables)
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Default, Debug)]
 pub enum Literal {
     #[default]
     Nil,
     Bool(bool),
     Num(f64),
-    Str(String),
+    Str(Rc<String>),
     Var(String),
 }
 
@@ -35,7 +37,7 @@ impl From<&Token<'_>> for Literal {
             Token::Keyword(True) => Self::Bool(true),
             Token::Keyword(False) => Self::Bool(false),
             Token::Keyword(Nil) => Self::Nil,
-            Token::Literal(Str(s)) => Self::Str(s.to_string()),
+            Token::Literal(Str(s)) => Self::Str(Rc::new(s.to_string())),
             Token::Literal(Num(n)) => Self::Num(*n),
             Token::Literal(Ident(x)) => Self::Var(x.to_string()),
             _ => Self::Nil,
@@ -264,16 +266,6 @@ impl From<AssignTarget> for Expr {
 #[repr(transparent)]
 pub struct Program(pub(crate) Vec<Decl>);
 
-impl IntoIterator for Program {
-    type Item = Decl;
-    type IntoIter = <Vec<Decl> as IntoIterator>::IntoIter;
-
-    #[inline]
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
-
 /// Declarations
 #[derive(Debug)]
 pub enum Decl {
@@ -301,6 +293,7 @@ pub struct Var {
     // TODO: more efficient variable representation
     pub ident: String,
     pub expr: Option<Expr>,
+    #[allow(dead_code)]
     pub span: Span,
 }
 
@@ -309,6 +302,7 @@ pub struct Var {
 pub enum Stmt {
     Block(Block),
     If(If),
+    While(While),
     Expr(Expr),
     Print(Print),
 }
@@ -319,6 +313,7 @@ impl Stmt {
         match self {
             Self::Block(Block { span, .. }) => span,
             Self::If(If { span, .. }) => span,
+            Self::While(While { span, .. }) => span,
             Self::Expr(expr) => expr.span(),
             Self::Print(Print { span, .. }) => span,
         }
@@ -336,6 +331,13 @@ impl From<If> for Stmt {
     #[inline]
     fn from(if_stmt: If) -> Self {
         Self::If(if_stmt)
+    }
+}
+
+impl From<While> for Stmt {
+    #[inline]
+    fn from(while_stmt: While) -> Self {
+        Self::While(while_stmt)
     }
 }
 
@@ -364,6 +366,13 @@ pub struct If {
     pub(crate) cond: Expr,
     pub(crate) then_branch: Box<Stmt>,
     pub(crate) else_branch: Option<Box<Stmt>>,
+    pub(crate) span: Span,
+}
+
+#[derive(Debug)]
+pub struct While {
+    pub(crate) cond: Expr,
+    pub(crate) body: Rc<Stmt>,
     pub(crate) span: Span,
 }
 

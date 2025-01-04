@@ -53,8 +53,8 @@ impl Termination for RuntimeError {
     }
 }
 
-pub(crate) trait IntoRuntimeError {
-    fn into_error(self, msg: impl Display) -> RuntimeError;
+pub(crate) trait ThrowRuntimeError {
+    fn throw(&self, msg: impl Display) -> RuntimeError;
 }
 
 #[cfg(test)]
@@ -88,7 +88,7 @@ mod tests {
             lineof: 25,
         };
 
-        let error = span.into_error("Operands must be numbers.");
+        let error = span.throw("Operands must be numbers.");
 
         let expected = "Operands must be numbers.\n[line 1]";
         assert_eq!(expected.to_string(), error.to_string());

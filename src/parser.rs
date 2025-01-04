@@ -1,9 +1,12 @@
 use std::borrow::Cow;
 use std::iter::Peekable;
+use std::rc::Rc;
 use std::str::FromStr;
 
 use crate::error::SyntaxError;
-use crate::ir::{AssignTarget, Atom, Block, Decl, Expr, If, Operator, Print, Program, Stmt, Var};
+use crate::ir::{
+    AssignTarget, Atom, Block, Decl, Expr, If, Operator, Print, Program, Stmt, Var, While,
+};
 use crate::lexer::{Lexer, TokenStream};
 use crate::span::Span;
 use crate::token::{Keyword, LexToken, Literal, Token};
@@ -168,7 +171,7 @@ macro_rules! rule {
             };
 
             // parse ;
-            span += self.semicolon()?;
+            span += self.semicolon("after statement")?;
             Ok(Some(Var { ident, expr, span }))
         }
     };
@@ -210,7 +213,7 @@ macro_rules! rule {
             }
 
             // consume closing '}' or fail if EOF was reached
-            span += self.right_brace()?;
+            span += self.right_brace("")?;
 
             Ok(Some(Block { decls, span }))
         }
@@ -223,12 +226,12 @@ macro_rules! rule {
                 return Ok(None);
             };
 
-            span += self.left_paren()?;
+            span += self.left_paren("after 'if'")?;
 
             let cond = self.$cond()?;
             span += cond.span();
 
-            span += self.right_paren()?;
+            span += self.right_paren("after if condition")?;
 
             let then_branch = self.$then().map(Box::new)?;
             span += then_branch.span();
@@ -250,12 +253,37 @@ macro_rules! rule {
         }
     };
 
+    // models: while_stmt → "while" "(" expression ")" statement ;
+    ($head:ident -> "while" "(" $cond:ident ")" $body:ident ;) => {
+        fn $head(&mut self) -> Result<Option<While>, SyntaxError> {
+            let Some(mut span) = self.while_keyword()? else {
+                return Ok(None);
+            };
+
+            span += self.left_paren("after 'while'")?;
+
+            let cond = self.$cond()?;
+            span += cond.span();
+
+            span += self.right_paren("after condition")?;
+
+            let body = self.$body().map(Rc::new)?;
+            span += body.span();
+
+            Ok(Some(While {
+                cond,
+                body,
+                span,
+            }))
+        }
+    };
+
     // models expr_stmt → expression ";" ;
     ($($head:ident -> $rule:ident ";" ; # $t:ty)+) => {
         $(
             fn $head(&mut self) -> Result<$t, SyntaxError> {
                 let expr = self.$rule()?;
-                let span = self.semicolon()?;
+                let span = self.semicolon("after statement")?;
                 Ok(expr + span)
             }
         )+
@@ -290,7 +318,7 @@ macro_rules! rule {
                 span += expr.span();
 
                 // parse ;
-                span += self.semicolon()?;
+                span += self.semicolon("after statement")?;
                 Ok(Some($t { expr, span }))
             }
         )+
@@ -465,7 +493,7 @@ macro_rules! rule {
     };
 
     // matches an optional simple token or keyword (e.g., LeftBrace)
-    ($($head:ident ? $t:ident$(($kw:ident))? ;)+) => {
+    ($($head:ident? $t:ident$(($kw:ident))? ;)+) => {
         $(
             fn $head(&mut self) -> Result<Option<Span>, SyntaxError> {
                 let Ok(next) = self.peek() else {
@@ -492,9 +520,9 @@ macro_rules! rule {
     };
 
     // matches a mandatory simple token or keyword (e.g, Semicolon, RightBrace)
-    ($($head:ident ? $t:ident$(($kw:ident))? : $err:expr ;)+) => {
+    ($($head:ident: $t:ident$(($kw:ident))? ;)+) => {
         $(
-            fn $head(&mut self) -> Result<Span, SyntaxError> {
+            fn $head(&mut self, ctx: &str) -> Result<Span, SyntaxError> {
                 match self.advance()? {
                     Ok(LexToken {
                         token: Token::$t$((Keyword::$kw))?,
@@ -505,14 +533,16 @@ macro_rules! rule {
                     Ok(LexToken { lexeme, span, .. }) => {
                         let span = span.clone();
                         let loc = ErrLoc::at(lexeme);
-                        Err(self.error(span, $err, loc))
+                        let msg = format!("Expect '{}' {ctx}.", Token::$t$((Keyword::$kw))?);
+                        Err(self.error(span, msg, loc))
                     }
 
                     Err(lineno) => {
                         // FIXME: proper span
                         let mut span = Span::empty();
                         span.lineno = lineno;
-                        Err(self.error(span, $err, ErrLoc::Eof))
+                        let msg = format!("Expect '{}' {ctx}.", Token::$t$((Keyword::$kw))?);
+                        Err(self.error(span, msg, ErrLoc::Eof))
                     }
                 }
             }
@@ -540,7 +570,10 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn error(&self, span: Span, msg: &str, loc: ErrLoc) -> SyntaxError {
+    fn error<M>(&self, span: Span, msg: M, loc: ErrLoc) -> SyntaxError
+    where
+        M: Into<Box<dyn std::error::Error + 'static>>,
+    {
         let code = span.snippet(self.source).to_string();
         SyntaxError {
             span,
@@ -610,6 +643,7 @@ impl<'a> Parser<'a> {
     ///                | block ;
     /// expr_stmt      → expression ";" ;
     /// if_stmt        → "if" "(" expression ")" statement ( "else" statement )? ;
+    /// while_stmt     → "while" "(" expression ")" statement ;
     /// print_stmt     → "print" expression ";" ;
     /// block          → "{" declaration* "}" ;
     /// expression     → assignment ;
@@ -659,9 +693,9 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        declaration -> statement | var_decl ;                     #  Decl
-        statement   -> expr_stmt | if_stmt | print_stmt | block ; #  Stmt
-        expression  -> assignment ;                               #  Expr
+        declaration -> statement | var_decl ;                                  #  Decl
+        statement   -> expr_stmt | if_stmt | while_stmt | print_stmt | block ; #  Stmt
+        expression  -> assignment ;                                            #  Expr
     }
 
     rule! {
@@ -678,6 +712,10 @@ impl<'a> Parser<'a> {
 
     rule! {
         if_stmt     -> "if" "(" expression ")" statement ( "else" statement )? ;
+    }
+
+    rule! {
+        while_stmt  -> "while" "(" expression ")" statement ;
     }
 
     rule! {
@@ -706,16 +744,17 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        left_brace    ? LeftBrace ;
-        if_keyword    ? Keyword(If) ;
-        else_keyword  ? Keyword(Else) ;
+        left_brace?    LeftBrace ;
+        if_keyword?    Keyword(If) ;
+        else_keyword?  Keyword(Else) ;
+        while_keyword? Keyword(While) ;
     }
 
     rule! {
-        semicolon     ? Semicolon  : "Expect ';' after statement." ;
-        left_paren    ? LeftParen  : "Expect '(' after 'if'." ;
-        right_paren   ? RightParen : "Expect ')' after if condition." ;
-        right_brace   ? RightBrace : "Expect '}' ." ;
+        semicolon: Semicolon;
+        left_paren: LeftParen;
+        right_paren: RightParen;
+        right_brace: RightBrace;
     }
 }
 

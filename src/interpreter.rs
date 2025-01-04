@@ -5,8 +5,10 @@ use std::io::Write;
 use std::ptr::NonNull;
 use std::rc::Rc;
 
-use crate::error::{IntoRuntimeError as _, RuntimeError};
-use crate::ir::{Atom, Block, Cons, Decl, Expr, If, Literal, Operator, Print, Program, Stmt, Var};
+use crate::error::{RuntimeError, ThrowRuntimeError as _};
+use crate::ir::{
+    Atom, Block, Cons, Decl, Expr, If, Literal, Operator, Print, Program, Stmt, Var, While,
+};
 use crate::span::Span;
 
 #[inline]
@@ -103,8 +105,13 @@ pub enum Value {
 
 impl Value {
     #[inline]
-    pub fn obj<T: 'static>(obj: T) -> Self {
-        Self::Object(Object::new(obj))
+    pub fn new<T: 'static>(obj: T) -> Self {
+        Self::obj(Rc::new(obj))
+    }
+
+    #[inline]
+    pub fn obj<T: 'static>(obj: Rc<T>) -> Self {
+        Self::Object(Object(obj))
     }
 
     pub fn map<T: 'static>(self, f: impl FnOnce(&T) -> T) -> Result<Self, Self> {
@@ -168,17 +175,10 @@ impl From<Value> for bool {
     }
 }
 
-#[derive(Debug)]
-struct Binding {
-    val: Value,
-    #[allow(dead_code)]
-    span: Span,
-}
-
 #[derive(Debug, Default)]
 struct Context {
     /// (global) bindings of variable names to their values
-    bindings: HashMap<String, Binding>,
+    bindings: HashMap<String, Value>,
     /// parent context (`None` indicates the global scope)
     enclosing: Option<NonNull<Context>>,
 }
@@ -196,32 +196,27 @@ impl Context {
     }
 
     #[inline]
-    fn define_var(&mut self, var: String, val: Option<Value>, span: Span) {
-        self.bindings.insert(
-            var,
-            Binding {
-                val: val.unwrap_or_default(),
-                span,
-            },
-        );
+    fn define_var(&mut self, var: &str, val: Option<Value>) {
+        self.bindings
+            .insert(var.to_string(), val.unwrap_or_default());
     }
 
     /// Register new assignment `var := val` and return new `val`
-    fn assign(&mut self, mut var: String, val: Value, span: Span) -> Result<Value, RuntimeError> {
+    fn assign(&mut self, var: &str, val: Value, span: &Span) -> Result<Value, RuntimeError> {
+        let mut var = var.to_string();
         let mut cx = self;
         loop {
             match cx.bindings.entry(var) {
                 Entry::Occupied(mut entry) => {
-                    let _ = entry.insert(Binding { val, span });
-                    let Binding { val, .. } = entry.get();
+                    let _ = entry.insert(val);
                     // NOTE: objects are ref-counted, so this should be cheap
-                    break Ok(val.clone());
+                    break Ok(entry.get().clone());
                 }
                 Entry::Vacant(entry) => {
                     var = entry.into_key();
 
                     let Some(mut enclosing) = cx.enclosing else {
-                        break Err(span.into_error(format!("Undefined variable '{var}'.")));
+                        break Err(span.throw(format!("Undefined variable '{var}'.")));
                     };
 
                     // SAFETY: Scope contexts are created from an exclusive reference to the parent
@@ -232,20 +227,17 @@ impl Context {
         }
     }
 
-    fn get_val<V>(&self, var: V, span: Span) -> Result<Value, RuntimeError>
-    where
-        V: AsRef<str> + Display,
-    {
-        let var = var.as_ref();
+    fn get_val(&self, var: &str, span: &Span) -> Result<Value, RuntimeError> {
         let mut cx = self;
 
         loop {
             match cx.bindings.get(var) {
-                Some(Binding { val, .. }) => break Ok(val.clone()),
+                // NOTE: objects are ref-counted, so this should be cheap
+                Some(val) => break Ok(val.clone()),
 
                 None => {
                     let Some(enclosing) = cx.enclosing else {
-                        break Err(span.into_error(format!("Undefined variable '{var}'.")));
+                        break Err(span.throw(format!("Undefined variable '{var}'.")));
                     };
 
                     // SAFETY: Scope contexts are created from an exclusive reference to the parent
@@ -258,12 +250,12 @@ impl Context {
 }
 
 trait Evaluate {
-    fn evaluate(self, cx: &mut Context) -> Result<Value, RuntimeError>;
+    fn evaluate(&self, cx: &mut Context) -> Result<Value, RuntimeError>;
 }
 
 impl Evaluate for Expr {
     #[inline]
-    fn evaluate(self, cx: &mut Context) -> Result<Value, RuntimeError> {
+    fn evaluate(&self, cx: &mut Context) -> Result<Value, RuntimeError> {
         match self {
             Self::Atom(atom) => atom.evaluate(cx),
             Self::Cons(cons) => cons.evaluate(cx),
@@ -273,30 +265,31 @@ impl Evaluate for Expr {
 
 impl Evaluate for Atom {
     #[inline]
-    fn evaluate(self, cx: &mut Context) -> Result<Value, RuntimeError> {
-        Ok(match self.literal {
-            Literal::Var(x) => cx.get_val(x, self.span)?,
-            Literal::Str(s) => Value::obj(s),
-            Literal::Num(n) => Value::obj(n),
-            Literal::Bool(b) => Value::obj(b),
+    fn evaluate(&self, cx: &mut Context) -> Result<Value, RuntimeError> {
+        Ok(match &self.literal {
+            Literal::Var(x) => cx.get_val(x, &self.span)?,
+            Literal::Str(s) => Value::obj(Rc::clone(s)),
+            Literal::Num(n) => Value::new(*n),
+            Literal::Bool(b) => Value::new(*b),
             Literal::Nil => Value::Nil,
         })
     }
 }
 
 impl Evaluate for Cons {
-    fn evaluate(mut self, cx: &mut Context) -> Result<Value, RuntimeError> {
-        let binary_args = |mut args: Vec<Expr>| match (args.pop(), args.pop()) {
-            (Some(rhs), Some(lhs)) => Some((lhs, rhs)),
-            _ => None,
-        };
+    fn evaluate(&self, cx: &mut Context) -> Result<Value, RuntimeError> {
+        #[inline]
+        fn binary_args(args: &[Expr]) -> Option<(&Expr, &Expr)> {
+            match args {
+                [lhs, rhs] => Some((lhs, rhs)),
+                _ => None,
+            }
+        }
 
         match self.op {
             Operator::Equal => {
-                let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(self
-                        .span
-                        .into_error("Operands must be l-value and r-value."));
+                let Some((lhs, rhs)) = binary_args(&self.args) else {
+                    return Err(self.span.throw("Operands must be l-value and r-value."));
                 };
 
                 // TODO: generalize to regions/places/locations where values can be assigned to
@@ -305,29 +298,27 @@ impl Evaluate for Cons {
                     ..
                 }) = lhs
                 else {
-                    return Err(self
-                        .span
-                        .into_error("Operands must be l-value and r-value."));
+                    return Err(self.span.throw("Operands must be l-value and r-value."));
                 };
 
                 let val = rhs.evaluate(cx)?;
 
                 // NOTE: assignment evaluates to the expression (rhs) value
                 //  - This is for cases such as `var a = b = 1;`
-                cx.assign(var, val, self.span)
+                cx.assign(var, val, &self.span)
             }
 
-            Operator::Bang => match self.args.pop() {
-                Some(rhs) => {
+            Operator::Bang => match self.args.as_slice() {
+                [rhs] => {
                     let value = rhs.evaluate(cx)?;
-                    Ok(Value::obj(!bool::from(value)))
+                    Ok(Value::new(!bool::from(value)))
                 }
-                None => Err(self.span.into_error("Operand must be an expression.")),
+                _ => Err(self.span.throw("Operand must be an expression.")),
             },
 
             Operator::And => {
-                let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(self.span.into_error("Operands must be two expressions."));
+                let Some((lhs, rhs)) = binary_args(&self.args) else {
+                    return Err(self.span.throw("Operands must be two expressions."));
                 };
 
                 let lhs = lhs.evaluate(cx)?;
@@ -340,8 +331,8 @@ impl Evaluate for Cons {
             }
 
             Operator::Or => {
-                let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(self.span.into_error("Operands must be two expressions."));
+                let Some((lhs, rhs)) = binary_args(&self.args) else {
+                    return Err(self.span.throw("Operands must be two expressions."));
                 };
 
                 let lhs = lhs.evaluate(cx)?;
@@ -354,28 +345,28 @@ impl Evaluate for Cons {
             }
 
             Operator::Plus => {
-                let Some((lhs, rhs)) = binary_args(self.args) else {
+                let Some((lhs, rhs)) = binary_args(&self.args) else {
                     return Err(self
                         .span
-                        .into_error("Operands must be two numbers or two strings."));
+                        .throw("Operands must be two numbers or two strings."));
                 };
 
                 let Value::Object(Object(lhs)) = lhs.evaluate(cx)? else {
                     return Err(self
                         .span
-                        .into_error("Operands must be two numbers or two strings."));
+                        .throw("Operands must be two numbers or two strings."));
                 };
 
                 let Value::Object(Object(rhs)) = rhs.evaluate(cx)? else {
                     return Err(self
                         .span
-                        .into_error("Operands must be two numbers or two strings."));
+                        .throw("Operands must be two numbers or two strings."));
                 };
 
                 if let (Some(lhs), Some(rhs)) =
                     (lhs.downcast_ref::<f64>(), rhs.downcast_ref::<f64>())
                 {
-                    return Ok(Value::obj(lhs + rhs));
+                    return Ok(Value::new(lhs + rhs));
                 }
 
                 match (lhs.downcast_ref::<String>(), rhs.downcast_ref::<String>()) {
@@ -383,149 +374,150 @@ impl Evaluate for Cons {
                         let mut s = String::with_capacity(left.len() + right.len());
                         s.push_str(left);
                         s.push_str(right);
-                        Ok(Value::obj(s))
+                        Ok(Value::new(s))
                     }
                     _ => Err(self
                         .span
-                        .into_error("Operands must be two numbers or two strings.")),
+                        .throw("Operands must be two numbers or two strings.")),
                 }
             }
 
-            Operator::Minus => match (self.args.pop(), self.args.pop()) {
-                (Some(rhs), None) => {
+            Operator::Minus => match self.args.as_slice() {
+                [rhs] => {
                     let rhs = rhs.evaluate(cx)?;
                     rhs.map::<f64>(|v| -*v)
-                        .map_err(|_| self.span.into_error("Operand must be a number."))
+                        .map_err(|_| self.span.throw("Operand must be a number."))
                 }
-                (Some(rhs), Some(lhs)) => {
+                [lhs, rhs] => {
                     let lhs = lhs.evaluate(cx)?;
                     let rhs = rhs.evaluate(cx)?;
 
                     lhs.combine::<f64, f64>(rhs, |x, y| x - y)
-                        .map_err(|_| self.span.into_error("Operands must be numbers."))
+                        .map_err(|_| self.span.throw("Operands must be numbers."))
                 }
                 _ => Err(self
                     .span
-                    .into_error("Operands must be two numbers or two strings.")),
+                    .throw("Operands must be two numbers or two strings.")),
             },
 
             Operator::Slash => {
-                let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(self.span.into_error("Operands must be numbers."));
+                let Some((lhs, rhs)) = binary_args(&self.args) else {
+                    return Err(self.span.throw("Operands must be numbers."));
                 };
 
                 let lhs = lhs.evaluate(cx)?;
                 let rhs = rhs.evaluate(cx)?;
 
                 lhs.combine::<f64, f64>(rhs, |x, y| x / y)
-                    .map_err(|_| self.span.into_error("Operands must be numbers."))
+                    .map_err(|_| self.span.throw("Operands must be numbers."))
             }
 
             Operator::Star => {
-                let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(self.span.into_error("Operands must be numbers."));
+                let Some((lhs, rhs)) = binary_args(&self.args) else {
+                    return Err(self.span.throw("Operands must be numbers."));
                 };
 
                 let lhs = lhs.evaluate(cx)?;
                 let rhs = rhs.evaluate(cx)?;
 
                 lhs.combine::<f64, f64>(rhs, |x, y| x * y)
-                    .map_err(|_| self.span.into_error("Operands must be numbers."))
+                    .map_err(|_| self.span.throw("Operands must be numbers."))
             }
 
             Operator::Greater => {
-                let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(self.span.into_error("Operands must be numbers."));
+                let Some((lhs, rhs)) = binary_args(&self.args) else {
+                    return Err(self.span.throw("Operands must be numbers."));
                 };
 
                 let lhs = lhs.evaluate(cx)?;
                 let rhs = rhs.evaluate(cx)?;
 
                 lhs.combine::<f64, bool>(rhs, |x, y| x > y)
-                    .map_err(|_| self.span.into_error("Operands must be numbers."))
+                    .map_err(|_| self.span.throw("Operands must be numbers."))
             }
 
             Operator::GreaterEqual => {
-                let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(self.span.into_error("Operands must be numbers."));
+                let Some((lhs, rhs)) = binary_args(&self.args) else {
+                    return Err(self.span.throw("Operands must be numbers."));
                 };
 
                 let lhs = lhs.evaluate(cx)?;
                 let rhs = rhs.evaluate(cx)?;
 
                 lhs.combine::<f64, bool>(rhs, |x, y| x >= y)
-                    .map_err(|_| self.span.into_error("Operands must be numbers."))
+                    .map_err(|_| self.span.throw("Operands must be numbers."))
             }
 
             Operator::Less => {
-                let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(self.span.into_error("Operands must be numbers."));
+                let Some((lhs, rhs)) = binary_args(&self.args) else {
+                    return Err(self.span.throw("Operands must be numbers."));
                 };
 
                 let lhs = lhs.evaluate(cx)?;
                 let rhs = rhs.evaluate(cx)?;
 
                 lhs.combine::<f64, bool>(rhs, |x, y| x < y)
-                    .map_err(|_| self.span.into_error("Operands must be numbers."))
+                    .map_err(|_| self.span.throw("Operands must be numbers."))
             }
 
             Operator::LessEqual => {
-                let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(self.span.into_error("Operands must be numbers."));
+                let Some((lhs, rhs)) = binary_args(&self.args) else {
+                    return Err(self.span.throw("Operands must be numbers."));
                 };
 
                 let lhs = lhs.evaluate(cx)?;
                 let rhs = rhs.evaluate(cx)?;
 
                 lhs.combine::<f64, bool>(rhs, |x, y| x <= y)
-                    .map_err(|_| self.span.into_error("Operands must be numbers."))
+                    .map_err(|_| self.span.throw("Operands must be numbers."))
             }
 
             Operator::BangEqual => {
-                let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(self.span.into_error("Operands must be numbers."));
+                let Some((lhs, rhs)) = binary_args(&self.args) else {
+                    return Err(self.span.throw("Operands must be numbers."));
                 };
 
                 let lhs = lhs.evaluate(cx)?;
                 let rhs = rhs.evaluate(cx)?;
 
-                Ok(Value::obj(lhs != rhs))
+                Ok(Value::new(lhs != rhs))
             }
 
             Operator::EqualEqual => {
-                let Some((lhs, rhs)) = binary_args(self.args) else {
-                    return Err(self.span.into_error("Operands must be numbers."));
+                let Some((lhs, rhs)) = binary_args(&self.args) else {
+                    return Err(self.span.throw("Operands must be numbers."));
                 };
 
                 let lhs = lhs.evaluate(cx)?;
                 let rhs = rhs.evaluate(cx)?;
 
-                Ok(Value::obj(lhs == rhs))
+                Ok(Value::new(lhs == rhs))
             }
 
-            Operator::LeftParen => match self.args.pop() {
-                Some(expr) => expr.evaluate(cx),
-                None => Err(self.span.into_error("Operand must be an expression.")),
+            Operator::LeftParen => match self.args.as_slice() {
+                [expr] => expr.evaluate(cx),
+                _ => Err(self.span.throw("Operand must be an expression.")),
             },
         }
     }
 }
 
 trait Interpret {
-    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError>;
+    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError>;
 }
 
 impl Interpret for Program {
     #[inline]
-    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
-        self.into_iter()
+    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+        self.0
+            .iter()
             .try_for_each(|decl| decl.interpret(cx, writer))
     }
 }
 
 impl Interpret for Decl {
     #[inline]
-    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
         match self {
             Self::Var(var) => var.interpret(cx, writer),
             Self::Stmt(stmt) => stmt.interpret(cx, writer),
@@ -534,19 +526,24 @@ impl Interpret for Decl {
 }
 
 impl Interpret for Var {
-    fn interpret<W: Write>(self, cx: &mut Context, _writer: &mut W) -> Result<(), RuntimeError> {
-        let value = self.expr.map(|expr| expr.evaluate(cx)).transpose()?;
-        cx.define_var(self.ident, value, self.span);
+    fn interpret<W: Write>(&self, cx: &mut Context, _writer: &mut W) -> Result<(), RuntimeError> {
+        let value = self
+            .expr
+            .as_ref()
+            .map(|expr| expr.evaluate(cx))
+            .transpose()?;
+        cx.define_var(&self.ident, value);
         Ok(())
     }
 }
 
 impl Interpret for Stmt {
     #[inline]
-    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
         match self {
             Self::Block(block) => block.interpret(cx, writer),
             Self::If(if_stmt) => if_stmt.interpret(cx, writer),
+            Self::While(while_stmt) => while_stmt.interpret(cx, writer),
             Self::Expr(expr) => expr.evaluate(cx).map(|_| ()),
             Self::Print(print) => print.interpret(cx, writer),
         }
@@ -555,22 +552,22 @@ impl Interpret for Stmt {
 
 impl Interpret for Block {
     #[inline]
-    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
         // SAFETY: `local` remains valid for the remainder of this block's interpretation
         let mut local = unsafe { cx.scope() };
         self.decls
-            .into_iter()
+            .iter()
             .try_for_each(|decl| decl.interpret(&mut local, writer))
     }
 }
 
 impl Interpret for If {
-    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
         let cond = self.cond.evaluate(cx)?;
 
         if cond.into() {
             self.then_branch.interpret(cx, writer)?;
-        } else if let Some(else_branch) = self.else_branch {
+        } else if let Some(ref else_branch) = self.else_branch {
             else_branch.interpret(cx, writer)?;
         }
 
@@ -578,10 +575,19 @@ impl Interpret for If {
     }
 }
 
+impl Interpret for While {
+    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+        while self.cond.evaluate(cx)?.into() {
+            self.body.interpret(cx, writer)?;
+        }
+        Ok(())
+    }
+}
+
 impl Interpret for Print {
-    fn interpret<W: Write>(self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
         let value = self.expr.evaluate(cx)?;
-        writeln!(writer, "{value}").map_err(move |error| self.span.into_error(error))
+        writeln!(writer, "{value}").map_err(move |error| self.span.throw(error))
     }
 }
 

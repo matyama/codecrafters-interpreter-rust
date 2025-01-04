@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::fmt::Display;
+use std::fmt::{Display, Write as _};
 
 use crate::span::Span;
 
@@ -60,25 +60,65 @@ impl<'a> TryFrom<Cow<'a, str>> for Keyword {
     }
 }
 
+impl From<Keyword> for &'static str {
+    fn from(keyword: Keyword) -> Self {
+        match keyword {
+            Keyword::And => "and",
+            Keyword::Class => "class",
+            Keyword::Else => "else",
+            Keyword::False => "false",
+            Keyword::Fun => "fun",
+            Keyword::For => "for",
+            Keyword::If => "if",
+            Keyword::Nil => "nil",
+            Keyword::Or => "or",
+            Keyword::Print => "print",
+            Keyword::Return => "return",
+            Keyword::Super => "super",
+            Keyword::This => "this",
+            Keyword::True => "true",
+            Keyword::Var => "var",
+            Keyword::While => "while",
+        }
+    }
+}
+
+impl From<&Keyword> for &'static str {
+    #[inline]
+    fn from(keyword: &Keyword) -> Self {
+        Self::from(*keyword)
+    }
+}
+
 impl Display for Keyword {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::And => write!(f, "AND"),
-            Self::Class => write!(f, "CLASS"),
-            Self::Else => write!(f, "ELSE"),
-            Self::False => write!(f, "FALSE"),
-            Self::Fun => write!(f, "FUN"),
-            Self::For => write!(f, "FOR"),
-            Self::If => write!(f, "IF"),
-            Self::Nil => write!(f, "NIL"),
-            Self::Or => write!(f, "OR"),
-            Self::Print => write!(f, "PRINT"),
-            Self::Return => write!(f, "RETURN"),
-            Self::Super => write!(f, "SUPER"),
-            Self::This => write!(f, "THIS"),
-            Self::True => write!(f, "TRUE"),
-            Self::Var => write!(f, "VAR"),
-            Self::While => write!(f, "WHILE"),
+        f.write_str(self.into())
+    }
+}
+
+#[repr(transparent)]
+struct KeywordTypeFmt(Keyword);
+
+impl Display for KeywordTypeFmt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            Keyword::And => write!(f, "AND"),
+            Keyword::Class => write!(f, "CLASS"),
+            Keyword::Else => write!(f, "ELSE"),
+            Keyword::False => write!(f, "FALSE"),
+            Keyword::Fun => write!(f, "FUN"),
+            Keyword::For => write!(f, "FOR"),
+            Keyword::If => write!(f, "IF"),
+            Keyword::Nil => write!(f, "NIL"),
+            Keyword::Or => write!(f, "OR"),
+            Keyword::Print => write!(f, "PRINT"),
+            Keyword::Return => write!(f, "RETURN"),
+            Keyword::Super => write!(f, "SUPER"),
+            Keyword::This => write!(f, "THIS"),
+            Keyword::True => write!(f, "TRUE"),
+            Keyword::Var => write!(f, "VAR"),
+            Keyword::While => write!(f, "WHILE"),
         }
     }
 }
@@ -155,6 +195,34 @@ impl Token<'_> {
     }
 }
 
+impl Display for Token<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Dot => f.write_char('.'),
+            Self::Comma => f.write_char(','),
+            Self::Semicolon => f.write_char(';'),
+            Self::LeftParen => f.write_char('('),
+            Self::RightParen => f.write_char(')'),
+            Self::LeftBrace => f.write_char('{'),
+            Self::RightBrace => f.write_char('}'),
+            Self::Plus => f.write_char('+'),
+            Self::Minus => f.write_char('-'),
+            Self::Star => f.write_char('*'),
+            Self::Slash => f.write_char('/'),
+            Self::Bang => f.write_char('!'),
+            Self::BangEqual => f.write_str("!="),
+            Self::Equal => f.write_char('='),
+            Self::EqualEqual => f.write_str("=="),
+            Self::Greater => f.write_char('>'),
+            Self::GreaterEqual => f.write_str(">="),
+            Self::Less => f.write_char('<'),
+            Self::LessEqual => f.write_str("<="),
+            Self::Literal(literal) => literal.fmt(f),
+            Self::Keyword(keyword) => keyword.fmt(f),
+        }
+    }
+}
+
 #[repr(transparent)]
 struct TokenTypeFmt<'a>(&'a Token<'a>);
 
@@ -183,7 +251,7 @@ impl Display for TokenTypeFmt<'_> {
             Token::Literal(Literal::Ident(_)) => write!(f, "IDENTIFIER"),
             Token::Literal(Literal::Str(_)) => write!(f, "STRING"),
             Token::Literal(Literal::Num(_)) => write!(f, "NUMBER"),
-            Token::Keyword(keyword) => write!(f, "{keyword}"),
+            Token::Keyword(keyword) => KeywordTypeFmt(*keyword).fmt(f),
         }
     }
 }

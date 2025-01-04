@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, Deref};
 
-use crate::error::{IntoRuntimeError, RuntimeError};
+use crate::error::{RuntimeError, ThrowRuntimeError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span {
@@ -117,11 +117,11 @@ impl<S: Deref<Target = Span>> AddAssign<S> for Span {
     }
 }
 
-impl IntoRuntimeError for Span {
+impl ThrowRuntimeError for Span {
     #[inline]
-    fn into_error(self, msg: impl Display) -> RuntimeError {
+    fn throw(&self, msg: impl Display) -> RuntimeError {
         RuntimeError {
-            span: self,
+            span: self.clone(),
             source: msg.to_string().into(),
         }
     }
