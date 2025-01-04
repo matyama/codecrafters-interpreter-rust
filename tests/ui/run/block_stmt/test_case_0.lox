@@ -1,8 +1,0 @@
-{
-    var foo = "before";
-    print foo;
-}
-{
-    var foo = "after";
-    print foo;
-}
