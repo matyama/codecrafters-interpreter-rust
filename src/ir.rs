@@ -101,6 +101,9 @@ pub enum Operator {
 
     // grouping operators
     LeftParen,
+
+    // invoking function-like objects
+    Call,
 }
 
 impl Display for Operator {
@@ -121,6 +124,7 @@ impl Display for Operator {
             Self::Less => f.write_str("<"),
             Self::LessEqual => f.write_str("<="),
             Self::LeftParen => f.write_str("group"),
+            Self::Call => Ok(()),
         }
     }
 }
@@ -143,6 +147,7 @@ impl From<&Token<'_>> for Option<Operator> {
             Token::Less => Some(Operator::Less),
             Token::LessEqual => Some(Operator::LessEqual),
             Token::LeftParen => Some(Operator::LeftParen),
+            // NOTE: Operator::Call must be constructed explicitly
             _ => None,
         }
     }

@@ -79,7 +79,17 @@ fn main() -> impl Termination {
                 Err(error) => return error.report(),
             };
 
-            match interpreter::evaluate(expr) {
+            let stdout = io::stdout().lock();
+            let mut writer = BufWriter::new(stdout);
+
+            let result = interpreter::evaluate(expr, &mut writer);
+
+            if let Err(error) = writer.flush() {
+                eprintln!("{error}");
+                return ExitCode::FAILURE;
+            }
+
+            match result {
                 Ok(value) => {
                     println!("{value}");
                     ExitCode::SUCCESS

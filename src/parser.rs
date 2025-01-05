@@ -4,11 +4,14 @@ use std::str::FromStr;
 
 use crate::error::SyntaxError;
 use crate::ir::{
-    self, AssignTarget, Atom, Block, Decl, Expr, If, Operator, Print, Program, Stmt, Var, While,
+    self, AssignTarget, Atom, Block, Cons, Decl, Expr, If, Operator, Print, Program, Stmt, Var,
+    While,
 };
 use crate::lexer::{Lexer, TokenStream};
 use crate::span::Span;
 use crate::token::{Keyword, LexToken, Literal, Token};
+
+const MAX_ARGS: usize = 255;
 
 impl FromStr for Expr {
     type Err = SyntaxError;
@@ -170,7 +173,7 @@ macro_rules! rule {
             };
 
             // parse ;
-            span += self.semicolon("after statement")?;
+            span += self.semicolon(|| "after statement")?;
             Ok(Some(Var { ident, expr, span }))
         }
     };
@@ -212,7 +215,7 @@ macro_rules! rule {
             }
 
             // consume closing '}' or fail if EOF was reached
-            span += self.right_brace("")?;
+            span += self.right_brace(|| "")?;
 
             Ok(Some(Block { decls, span }))
         }
@@ -225,12 +228,12 @@ macro_rules! rule {
                 return Ok(None);
             };
 
-            span += self.left_paren("after 'if'")?;
+            span += self.left_paren(|| "after 'if'")?;
 
             let cond = self.$cond()?;
             span += cond.span();
 
-            span += self.right_paren("after if condition")?;
+            span += self.right_paren(|| "after if condition")?;
 
             let then_branch = self.$then().map(Box::new)?;
             span += then_branch.span();
@@ -259,12 +262,12 @@ macro_rules! rule {
                 return Ok(None);
             };
 
-            span += self.left_paren("after 'while'")?;
+            span += self.left_paren(|| "after 'while'")?;
 
             let cond = self.$cond()?;
             span += cond.span();
 
-            span += self.right_paren("after condition")?;
+            span += self.right_paren(|| "after condition")?;
 
             let body = self.$body().map(Box::new)?;
             span += body.span();
@@ -290,7 +293,7 @@ macro_rules! rule {
                 return Ok(None);
             };
 
-            span += self.left_paren("after 'for'")?;
+            span += self.left_paren(|| "after 'for'")?;
 
             let mut initializer = None;
 
@@ -313,7 +316,7 @@ macro_rules! rule {
                 })
             } else {
                 let cond = self.$cond()?;
-                span += self.semicolon("after loop condition")?;
+                span += self.semicolon(|| "after loop condition")?;
                 cond
             };
 
@@ -322,7 +325,7 @@ macro_rules! rule {
                 None
             } else {
                 let inc = self.$inc()?;
-                span += self.right_paren("after for clauses")?;
+                span += self.right_paren(|| "after for clauses")?;
                 Some(inc)
             };
 
@@ -361,7 +364,7 @@ macro_rules! rule {
         $(
             fn $head(&mut self) -> Result<$t, SyntaxError> {
                 let expr = self.$rule()?;
-                let span = self.semicolon("after statement")?;
+                let span = self.semicolon(|| "after statement")?;
                 Ok(expr + span)
             }
         )+
@@ -396,7 +399,7 @@ macro_rules! rule {
                 span += expr.span();
 
                 // parse ;
-                span += self.semicolon("after statement")?;
+                span += self.semicolon(|| "after statement")?;
                 Ok(Some($t { expr, span }))
             }
         )+
@@ -481,6 +484,38 @@ macro_rules! rule {
                 }
             }
         )+
+    };
+
+    // models: call → primary ( "(" arguments? ")" )* ;
+    ($head:ident -> $rule0:ident ( "(" $rule:ident? ")" )* ; ) => {
+        fn call(&mut self) -> Result<Expr, SyntaxError> {
+            let mut expr = self.$rule0()?;
+
+            loop {
+                let Some(s) = self.left_paren_token()? else {
+                    break Ok(expr);
+                };
+
+                // finish call
+                expr = {
+                    let mut span = expr.span() + &s;
+                    let mut args = vec![expr];
+
+                    if let Some(s) = self.right_paren_token()? {
+                        span += s;
+                    } else {
+                        span = self.$rule(&mut args, span)?;
+                        span += self.right_paren(|| format!("after {}", stringify!($head)))?;
+                    }
+
+                    Expr::Cons(Cons {
+                        op: Operator::Call,
+                        args,
+                        span,
+                    })
+                };
+            }
+        }
     };
 
     // models: primary → NUMBER | STRING | "true" | "false" | "nil" | "(" expression ")" | IDENTIFIER ;
@@ -570,6 +605,46 @@ macro_rules! rule {
         }
     };
 
+    // models: arguments → expression ( "," expression )* ;
+    // TODO: reuse for function parameters
+    ($head:ident -> $rule:ident ( "," $_:ident )* ; # $limit:ident) => {
+        fn $head(&mut self, items: &mut Vec<Expr>, mut span: Span) -> Result<Span, SyntaxError> {
+            loop {
+                if items.len() >= $limit {
+                    let Ok(next) = self.peek() else {
+                        let Err(error) = self.advance() else {
+                            unreachable!("peeked an error");
+                        };
+                        return Err(error);
+                    };
+
+                    let msg = format!("Can't have more than {} {}.", $limit, stringify!($head));
+
+                    return Err(match next {
+                        Ok(t) => {
+                            span += &t.span;
+                            let loc = ErrLoc::at(&t.lexeme);
+                            self.error(span, msg, loc)
+                        }
+                        Err(s) => self.error(span + s, msg, ErrLoc::Eof),
+                    });
+                }
+
+                let item = self.$rule()?;
+                span += item.span();
+
+                items.push(item);
+
+                let Some(s) = self.comma_token()? else {
+                    break;
+                };
+                span += s;
+            }
+
+            Ok(span)
+        }
+    };
+
     // matches an optional simple token or keyword (e.g., LeftBrace)
     ($($head:ident? $t:ident$(($kw:ident))? ;)+) => {
         $(
@@ -600,7 +675,11 @@ macro_rules! rule {
     // matches a mandatory simple token or keyword (e.g, Semicolon, RightBrace)
     ($($head:ident: $t:ident$(($kw:ident))? ;)+) => {
         $(
-            fn $head(&mut self, ctx: &str) -> Result<Span, SyntaxError> {
+            fn $head<C, D>(&mut self, ctx: C) -> Result<Span, SyntaxError>
+            where
+                D: std::fmt::Display,
+                C: Fn() -> D,
+            {
                 match self.advance()? {
                     Ok(LexToken {
                         token: Token::$t$((Keyword::$kw))?,
@@ -611,7 +690,7 @@ macro_rules! rule {
                     Ok(LexToken { lexeme, span, .. }) => {
                         let span = span.clone();
                         let loc = ErrLoc::at(lexeme);
-                        let msg = format!("Expect '{}' {ctx}.", Token::$t$((Keyword::$kw))?);
+                        let msg = format!("Expect '{}' {}.", Token::$t$((Keyword::$kw))?, ctx());
                         Err(self.error(span, msg, loc))
                     }
 
@@ -619,7 +698,7 @@ macro_rules! rule {
                         // FIXME: proper span
                         let mut span = Span::empty();
                         span.lineno = lineno;
-                        let msg = format!("Expect '{}' {ctx}.", Token::$t$((Keyword::$kw))?);
+                        let msg = format!("Expect '{}' {}.", Token::$t$((Keyword::$kw))?, ctx());
                         Err(self.error(span, msg, ErrLoc::Eof))
                     }
                 }
@@ -738,10 +817,13 @@ impl<'a> Parser<'a> {
     /// term           → factor ( ( "-" | "+" ) factor )* ;
     /// factor         → unary ( ( "/" | "*" ) unary )* ;
     /// unary          → ( "!" | "-" ) unary
-    ///                | primary ;
+    ///                | call ;
+    /// call           → primary ( "(" arguments? ")" )* ;
     /// primary        → NUMBER | STRING | "true" | "false" | "nil"
     ///                | "(" expression ")"
     ///                | IDENTIFIER ;
+    ///
+    /// arguments      → expression ( "," expression )* ;
     /// ```
     #[inline]
     pub fn parse_prog(mut self) -> Result<Program, SyntaxError> {
@@ -760,10 +842,13 @@ impl<'a> Parser<'a> {
     /// term           → factor ( ( "-" | "+" ) factor )* ;
     /// factor         → unary ( ( "/" | "*" ) unary )* ;
     /// unary          → ( "!" | "-" ) unary
-    ///                | primary ;
+    ///                | call ;
+    /// call           → primary ( "(" arguments? ")" )* ;
     /// primary        → NUMBER | STRING | "true" | "false" | "nil"
     ///                | "(" expression ")"
     ///                | IDENTIFIER ;
+    ///
+    /// arguments      → expression ( "," expression )* ;
     /// ```
     #[inline]
     pub fn parse_expr(mut self) -> Result<Expr, SyntaxError> {
@@ -823,7 +908,11 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        unary       -> (Bang | Minus) unary | primary ;
+        unary       -> (Bang | Minus) unary | call ;
+    }
+
+    rule! {
+        call        -> primary ( "(" arguments? ")" )* ;
     }
 
     rule! {
@@ -831,7 +920,13 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
+        arguments   -> expression ( "," expression )* ;  # MAX_ARGS
+    }
+
+    rule! {
+        comma_token?          Comma ;
         semicolon_token?      Semicolon ;
+        left_paren_token?     LeftParen ;
         right_paren_token?    RightParen ;
         left_brace_token?     LeftBrace ;
         if_keyword?           Keyword(If) ;

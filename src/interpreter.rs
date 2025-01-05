@@ -12,15 +12,17 @@ use crate::ir::{
 use crate::span::Span;
 
 #[inline]
-pub fn evaluate(expr: Expr) -> Result<Value, RuntimeError> {
-    let mut cx = Context::default();
+pub fn evaluate<W: Write>(expr: Expr, writer: &mut W) -> Result<Value, RuntimeError> {
+    let mut globals = Environment::global();
+    let mut cx = Context::new(&mut globals, writer);
     expr.evaluate(&mut cx)
 }
 
 #[inline]
 pub fn interpret<W: Write>(prog: Program, writer: &mut W) -> Result<(), RuntimeError> {
-    let mut cx = Context::default();
-    prog.interpret(&mut cx, writer)
+    let mut globals = Environment::global();
+    let mut cx = Context::new(&mut globals, writer);
+    prog.interpret(&mut cx)
 }
 
 // TODO: GC with tracing to collect cyclic object graphs
@@ -175,15 +177,99 @@ impl From<Value> for bool {
     }
 }
 
+trait Call: std::fmt::Debug + Display {
+    fn arity(&self) -> usize;
+
+    fn call(&self, args: Vec<Value>, cx: &mut Context) -> Result<Value, RuntimeError>;
+}
+
+fn clock(args: Vec<Value>, _cx: &mut Context) -> Result<Value, RuntimeError> {
+    debug_assert!(args.is_empty(), "'clock()' takes no arguments");
+
+    // XXX: turn this into a RuntimeError (i.e., require span)
+    let elapsed = std::time::UNIX_EPOCH
+        .elapsed()
+        .map(|elapsed| elapsed.as_secs() as f64)
+        .map(Value::new)
+        .expect("time went backwards");
+
+    Ok(elapsed)
+}
+
+#[derive(Debug)]
+struct Native {
+    func: fn(Vec<Value>, &mut Context) -> Result<Value, RuntimeError>,
+    arity: usize,
+}
+
+impl Display for Native {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<native fn>")
+    }
+}
+
+impl Call for Native {
+    #[inline]
+    fn arity(&self) -> usize {
+        self.arity
+    }
+
+    #[inline]
+    fn call(&self, args: Vec<Value>, cx: &mut Context) -> Result<Value, RuntimeError> {
+        debug_assert_eq!(args.len(), self.arity);
+        (self.func)(args, cx)
+    }
+}
+
+#[derive(Debug)]
+#[repr(transparent)]
+struct Callable(Box<dyn Call + 'static>);
+
+impl Display for Callable {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl Call for Callable {
+    #[inline]
+    fn arity(&self) -> usize {
+        self.0.arity()
+    }
+
+    #[inline]
+    fn call(&self, args: Vec<Value>, cx: &mut Context) -> Result<Value, RuntimeError> {
+        self.0.call(args, cx)
+    }
+}
+
 #[derive(Debug, Default)]
-struct Context {
+struct Environment {
     /// (global) bindings of variable names to their values
     bindings: HashMap<String, Value>,
     /// parent context (`None` indicates the global scope)
-    enclosing: Option<NonNull<Context>>,
+    enclosing: Option<NonNull<Environment>>,
 }
 
-impl Context {
+impl Environment {
+    fn global() -> Self {
+        let mut globals = Self::default();
+
+        // initialize global environment with native functions
+        {
+            let clock = Callable(Box::new(Native {
+                func: clock,
+                arity: 0,
+            }));
+
+            globals.define("clock", Some(Value::new(clock)));
+        }
+
+        globals
+    }
+
     /// ### Safety
     ///
     /// The caller must ensure that `&mut self` remains valid for the lifetime of the returned
@@ -196,7 +282,7 @@ impl Context {
     }
 
     #[inline]
-    fn define_var(&mut self, var: &str, val: Option<Value>) {
+    fn define(&mut self, var: &str, val: Option<Value>) {
         self.bindings
             .insert(var.to_string(), val.unwrap_or_default());
     }
@@ -204,9 +290,9 @@ impl Context {
     /// Register new assignment `var := val` and return new `val`
     fn assign(&mut self, var: &str, val: Value, span: &Span) -> Result<Value, RuntimeError> {
         let mut var = var.to_string();
-        let mut cx = self;
+        let mut env = self;
         loop {
-            match cx.bindings.entry(var) {
+            match env.bindings.entry(var) {
                 Entry::Occupied(mut entry) => {
                     let _ = entry.insert(val);
                     // NOTE: objects are ref-counted, so this should be cheap
@@ -215,36 +301,53 @@ impl Context {
                 Entry::Vacant(entry) => {
                     var = entry.into_key();
 
-                    let Some(mut enclosing) = cx.enclosing else {
+                    let Some(mut enclosing) = env.enclosing else {
                         break Err(span.throw(format!("Undefined variable '{var}'.")));
                     };
 
                     // SAFETY: Scope contexts are created from an exclusive reference to the parent
-                    // context, which remains valid until the block is fully interpreted.
-                    cx = unsafe { enclosing.as_mut() };
+                    // environment, which remains valid until the block is fully interpreted.
+                    env = unsafe { enclosing.as_mut() };
                 }
             }
         }
     }
 
-    fn get_val(&self, var: &str, span: &Span) -> Result<Value, RuntimeError> {
-        let mut cx = self;
+    fn get(&self, var: &str, span: &Span) -> Result<Value, RuntimeError> {
+        let mut env = self;
 
         loop {
-            match cx.bindings.get(var) {
+            match env.bindings.get(var) {
                 // NOTE: objects are ref-counted, so this should be cheap
                 Some(val) => break Ok(val.clone()),
 
                 None => {
-                    let Some(enclosing) = cx.enclosing else {
+                    let Some(enclosing) = env.enclosing else {
                         break Err(span.throw(format!("Undefined variable '{var}'.")));
                     };
 
                     // SAFETY: Scope contexts are created from an exclusive reference to the parent
-                    // context, which remains valid until the block is fully interpreted.
-                    cx = unsafe { enclosing.as_ref() };
+                    // environment, which remains valid until the block is fully interpreted.
+                    env = unsafe { enclosing.as_ref() };
                 }
             }
+        }
+    }
+}
+
+struct Context<'a> {
+    environment: Environment,
+    globals: &'a mut Environment,
+    writer: &'a mut dyn Write,
+}
+
+impl<'a> Context<'a> {
+    fn new<W: Write>(globals: &'a mut Environment, writer: &'a mut W) -> Self {
+        Self {
+            // SAFETY: we keep &mut globals around for the whole lifetime of this context
+            environment: unsafe { globals.scope() },
+            globals,
+            writer,
         }
     }
 }
@@ -267,7 +370,7 @@ impl Evaluate for Atom {
     #[inline]
     fn evaluate(&self, cx: &mut Context) -> Result<Value, RuntimeError> {
         Ok(match &self.literal {
-            Literal::Var(x) => cx.get_val(x, &self.span)?,
+            Literal::Var(x) => cx.environment.get(x, &self.span)?,
             Literal::Str(s) => Value::obj(Rc::clone(s)),
             Literal::Num(n) => Value::new(*n),
             Literal::Bool(b) => Value::new(*b),
@@ -305,7 +408,7 @@ impl Evaluate for Cons {
 
                 // NOTE: assignment evaluates to the expression (rhs) value
                 //  - This is for cases such as `var a = b = 1;`
-                cx.assign(var, val, &self.span)
+                cx.environment.assign(var, val, &self.span)
             }
 
             Operator::Bang => match self.args.as_slice() {
@@ -498,77 +601,117 @@ impl Evaluate for Cons {
                 [expr] => expr.evaluate(cx),
                 _ => Err(self.span.throw("Operand must be an expression.")),
             },
+
+            // XXX: unify with LeftParen (i.e., use LeftParen for both groups and fun calls)
+            //  - issue: impl Display for Operator (`(group <arg0>)` vs `(<arg0>)`)
+            Operator::Call => {
+                let arg0 = match self.args.as_slice() {
+                    [expr, ..] => expr.evaluate(cx)?,
+                    _ => return Err(self.span.throw("Operand must be an expression.")),
+                };
+
+                let Value::Object(Object(arg0)) = arg0 else {
+                    return Err(self.span.throw("Can only call functions and classes."));
+                };
+
+                let Some(callee) = arg0.downcast_ref::<Callable>() else {
+                    return Err(self.span.throw("Can only call functions and classes."));
+                };
+
+                // evaluate arguments
+                let mut args = Vec::with_capacity(self.args.len() - 1);
+                for arg in self.args.iter().skip(1) {
+                    let arg = arg.evaluate(cx)?;
+                    args.push(arg);
+                }
+
+                if args.len() != callee.arity() {
+                    let error = format!(
+                        "Expected {} arguments but got {}.",
+                        callee.arity(),
+                        args.len(),
+                    );
+                    return Err(self.span.throw(error));
+                }
+
+                // NOTE: due to function calls, evaluate may have side-effects
+                callee.call(args, cx)
+            }
         }
     }
 }
 
 trait Interpret {
-    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError>;
+    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError>;
 }
 
 impl Interpret for Program {
     #[inline]
-    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
-        self.0
-            .iter()
-            .try_for_each(|decl| decl.interpret(cx, writer))
+    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
+        self.0.iter().try_for_each(|decl| decl.interpret(cx))
     }
 }
 
 impl Interpret for Decl {
     #[inline]
-    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
         match self {
-            Self::Var(var) => var.interpret(cx, writer),
-            Self::Stmt(stmt) => stmt.interpret(cx, writer),
+            Self::Var(var) => var.interpret(cx),
+            Self::Stmt(stmt) => stmt.interpret(cx),
         }
     }
 }
 
 impl Interpret for Var {
-    fn interpret<W: Write>(&self, cx: &mut Context, _writer: &mut W) -> Result<(), RuntimeError> {
+    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
         let value = self
             .expr
             .as_ref()
             .map(|expr| expr.evaluate(cx))
             .transpose()?;
-        cx.define_var(&self.ident, value);
+
+        cx.environment.define(&self.ident, value);
         Ok(())
     }
 }
 
 impl Interpret for Stmt {
     #[inline]
-    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
         match self {
-            Self::Block(block) => block.interpret(cx, writer),
-            Self::If(if_stmt) => if_stmt.interpret(cx, writer),
-            Self::While(while_stmt) => while_stmt.interpret(cx, writer),
+            Self::Block(block) => block.interpret(cx),
+            Self::If(if_stmt) => if_stmt.interpret(cx),
+            Self::While(while_stmt) => while_stmt.interpret(cx),
             Self::Expr(expr) => expr.evaluate(cx).map(|_| ()),
-            Self::Print(print) => print.interpret(cx, writer),
+            Self::Print(print) => print.interpret(cx),
         }
     }
 }
 
 impl Interpret for Block {
     #[inline]
-    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
-        // SAFETY: `local` remains valid for the remainder of this block's interpretation
-        let mut local = unsafe { cx.scope() };
+    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
+        let mut local = Context {
+            // SAFETY: `local` remains valid for the remainder of this block's interpretation
+            environment: unsafe { cx.environment.scope() },
+            globals: cx.globals,
+            writer: cx.writer,
+        };
+
         self.decls
             .iter()
-            .try_for_each(|decl| decl.interpret(&mut local, writer))
+            .try_for_each(|decl| decl.interpret(&mut local))
     }
 }
 
 impl Interpret for If {
-    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
         let cond = self.cond.evaluate(cx)?;
 
         if cond.into() {
-            self.then_branch.interpret(cx, writer)?;
+            self.then_branch.interpret(cx)?;
         } else if let Some(ref else_branch) = self.else_branch {
-            else_branch.interpret(cx, writer)?;
+            else_branch.interpret(cx)?;
         }
 
         Ok(())
@@ -576,18 +719,18 @@ impl Interpret for If {
 }
 
 impl Interpret for While {
-    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
         while self.cond.evaluate(cx)?.into() {
-            self.body.interpret(cx, writer)?;
+            self.body.interpret(cx)?;
         }
         Ok(())
     }
 }
 
 impl Interpret for Print {
-    fn interpret<W: Write>(&self, cx: &mut Context, writer: &mut W) -> Result<(), RuntimeError> {
+    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
         let value = self.expr.evaluate(cx)?;
-        writeln!(writer, "{value}").map_err(move |error| self.span.throw(error))
+        writeln!(cx.writer, "{value}").map_err(move |error| self.span.throw(error))
     }
 }
 
