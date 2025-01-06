@@ -7,7 +7,8 @@ use std::rc::Rc;
 
 use crate::error::{RuntimeError, ThrowRuntimeError as _};
 use crate::ir::{
-    Atom, Block, Cons, Decl, Expr, If, Literal, Operator, Print, Program, Stmt, Var, While,
+    Atom, Block, Cons, Decl, Expr, Fun, Function, If, Literal, Operator, Print, Program, Stmt, Var,
+    While,
 };
 use crate::span::Span;
 
@@ -116,6 +117,23 @@ impl Value {
         Self::Object(Object(obj))
     }
 
+    fn downcast_callable(&self) -> Option<&dyn Call> {
+        match self {
+            Self::Object(Object(obj)) => {
+                if let Some(f) = obj.downcast_ref::<Native>() {
+                    return Some(f as &dyn Call);
+                }
+
+                if let Some(f) = obj.downcast_ref::<Function>() {
+                    return Some(f as &dyn Call);
+                }
+
+                None
+            }
+            Self::Nil => None,
+        }
+    }
+
     pub fn map<T: 'static>(self, f: impl FnOnce(&T) -> T) -> Result<Self, Self> {
         match self {
             Self::Object(obj) => obj.map::<T>(f).map(Self::Object).map_err(Self::Object),
@@ -196,6 +214,7 @@ fn clock(args: Vec<Value>, _cx: &mut Context) -> Result<Value, RuntimeError> {
     Ok(elapsed)
 }
 
+/// Built-in (native) function
 #[derive(Debug)]
 struct Native {
     func: fn(Vec<Value>, &mut Context) -> Result<Value, RuntimeError>,
@@ -222,26 +241,37 @@ impl Call for Native {
     }
 }
 
-#[derive(Debug)]
-#[repr(transparent)]
-struct Callable(Box<dyn Call + 'static>);
-
-impl Display for Callable {
+impl Display for Function {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
+        write!(f, "<fn {}>", self.ident)
     }
 }
 
-impl Call for Callable {
+impl Call for Function {
     #[inline]
     fn arity(&self) -> usize {
-        self.0.arity()
+        self.params.len()
     }
 
-    #[inline]
     fn call(&self, args: Vec<Value>, cx: &mut Context) -> Result<Value, RuntimeError> {
-        self.0.call(args, cx)
+        // create fresh environment (initialized only from globals)
+        // SAFETY: globals and original cx remain valid for the whole call
+        let environment = unsafe { cx.globals.scope() };
+
+        let mut closure = Context {
+            environment,
+            globals: cx.globals,
+            writer: cx.writer,
+        };
+
+        // associate all parameters with their corresponding argument values
+        for (param, value) in self.params.iter().zip(args) {
+            closure.environment.define(param.name(), Some(value));
+        }
+
+        // execute function's body under the appropriate context
+        self.body.interpret(&mut closure).map(|_| Value::Nil)
     }
 }
 
@@ -259,10 +289,10 @@ impl Environment {
 
         // initialize global environment with native functions
         {
-            let clock = Callable(Box::new(Native {
+            let clock = Native {
                 func: clock,
                 arity: 0,
-            }));
+            };
 
             globals.define("clock", Some(Value::new(clock)));
         }
@@ -352,6 +382,15 @@ impl<'a> Context<'a> {
     }
 }
 
+impl std::fmt::Debug for Context<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Context")
+            .field("environment", &self.environment)
+            .field("globals", self.globals)
+            .finish_non_exhaustive()
+    }
+}
+
 trait Evaluate {
     fn evaluate(&self, cx: &mut Context) -> Result<Value, RuntimeError>;
 }
@@ -370,7 +409,7 @@ impl Evaluate for Atom {
     #[inline]
     fn evaluate(&self, cx: &mut Context) -> Result<Value, RuntimeError> {
         Ok(match &self.literal {
-            Literal::Var(x) => cx.environment.get(x, &self.span)?,
+            Literal::Ident(x) => cx.environment.get(x, &self.span)?,
             Literal::Str(s) => Value::obj(Rc::clone(s)),
             Literal::Num(n) => Value::new(*n),
             Literal::Bool(b) => Value::new(*b),
@@ -397,7 +436,7 @@ impl Evaluate for Cons {
 
                 // TODO: generalize to regions/places/locations where values can be assigned to
                 let Expr::Atom(Atom {
-                    literal: Literal::Var(var),
+                    literal: Literal::Ident(var),
                     ..
                 }) = lhs
                 else {
@@ -610,11 +649,7 @@ impl Evaluate for Cons {
                     _ => return Err(self.span.throw("Operand must be an expression.")),
                 };
 
-                let Value::Object(Object(arg0)) = arg0 else {
-                    return Err(self.span.throw("Can only call functions and classes."));
-                };
-
-                let Some(callee) = arg0.downcast_ref::<Callable>() else {
+                let Some(callee) = arg0.downcast_callable() else {
                     return Err(self.span.throw("Can only call functions and classes."));
                 };
 
@@ -656,9 +691,19 @@ impl Interpret for Decl {
     #[inline]
     fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
         match self {
+            Self::Fun(fun) => fun.interpret(cx),
             Self::Var(var) => var.interpret(cx),
             Self::Stmt(stmt) => stmt.interpret(cx),
         }
+    }
+}
+
+impl Interpret for Fun {
+    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
+        let ident = &self.func.ident;
+        let func = Rc::clone(&self.func);
+        cx.environment.define(ident, Some(Value::obj(func)));
+        Ok(())
     }
 }
 
@@ -670,7 +715,7 @@ impl Interpret for Var {
             .map(|expr| expr.evaluate(cx))
             .transpose()?;
 
-        cx.environment.define(&self.ident, value);
+        cx.environment.define(self.ident.name(), value);
         Ok(())
     }
 }
@@ -730,7 +775,16 @@ impl Interpret for While {
 impl Interpret for Print {
     fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
         let value = self.expr.evaluate(cx)?;
-        writeln!(cx.writer, "{value}").map_err(move |error| self.span.throw(error))
+
+        // FIXME: Call instances can be printed, but panic if behind a Value::Object
+        // writeln!(cx.writer, "{value}").map_err(move |error| self.span.throw(error))
+
+        if let Some(callable) = value.downcast_callable() {
+            writeln!(cx.writer, "{callable}")
+        } else {
+            writeln!(cx.writer, "{value}")
+        }
+        .map_err(move |error| self.span.throw(error))
     }
 }
 

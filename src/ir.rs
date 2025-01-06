@@ -5,6 +5,25 @@ use std::rc::Rc;
 use crate::span::Span;
 use crate::token::{Keyword, LexToken, Token};
 
+// TODO: more efficient identifier representation
+#[derive(Debug)]
+pub struct Ident {
+    pub(crate) name: String,
+    pub(crate) span: Span,
+}
+
+impl Ident {
+    #[inline]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[inline]
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+}
+
 // TODO: find a better story for representing strings (and var identifiers)
 /// Atomic expression (literal values and variables)
 #[derive(Clone, Default, Debug)]
@@ -14,7 +33,7 @@ pub enum Literal {
     Bool(bool),
     Num(f64),
     Str(Rc<String>),
-    Var(String),
+    Ident(String),
 }
 
 impl Display for Literal {
@@ -25,7 +44,7 @@ impl Display for Literal {
             Self::Num(n) if n.fract() > 0.0 => write!(f, "{n}"),
             Self::Num(n) => write!(f, "{n:.1}"),
             Self::Str(s) => write!(f, "{s}"),
-            Self::Var(x) => write!(f, "{x}"),
+            Self::Ident(x) => write!(f, "{x}"),
         }
     }
 }
@@ -39,7 +58,7 @@ impl From<&Token<'_>> for Literal {
             Token::Keyword(Nil) => Self::Nil,
             Token::Literal(Str(s)) => Self::Str(Rc::new(s.to_string())),
             Token::Literal(Num(n)) => Self::Num(*n),
-            Token::Literal(Ident(x)) => Self::Var(x.to_string()),
+            Token::Literal(Ident(x)) => Self::Ident(x.to_string()),
             _ => Self::Nil,
         }
     }
@@ -56,6 +75,16 @@ impl From<&LexToken<'_>> for Atom {
         Self {
             literal: Literal::from(&token.token),
             span: token.span.clone(),
+        }
+    }
+}
+
+impl From<Ident> for Atom {
+    #[inline]
+    fn from(Ident { name, span }: Ident) -> Self {
+        Self {
+            literal: Literal::Ident(name),
+            span,
         }
     }
 }
@@ -240,6 +269,13 @@ impl Add<Span> for Expr {
     }
 }
 
+impl From<Ident> for Expr {
+    #[inline]
+    fn from(ident: Ident) -> Self {
+        Self::Atom(Atom::from(ident))
+    }
+}
+
 /// [Expr]ession wrapper indicating a valid *r-value* (i.e, assignment target)
 #[derive(Debug)]
 #[repr(transparent)]
@@ -252,7 +288,7 @@ impl TryFrom<Expr> for AssignTarget {
         // TODO: support other kinds of assignment targets than just a variable identifier
         match expr {
             var @ Expr::Atom(Atom {
-                literal: Literal::Var(_),
+                literal: Literal::Ident(_),
                 ..
             }) => Ok(AssignTarget(var)),
             expr => Err(expr),
@@ -274,6 +310,7 @@ pub struct Program(pub(crate) Vec<Decl>);
 /// Declarations
 #[derive(Debug)]
 pub enum Decl {
+    Fun(Fun),
     Var(Var),
     Stmt(Stmt),
 }
@@ -282,9 +319,17 @@ impl Decl {
     #[inline]
     pub fn span(&self) -> &Span {
         match self {
+            Self::Fun(Fun { span, .. }) => span,
             Self::Var(Var { span, .. }) => span,
             Self::Stmt(stmt) => stmt.span(),
         }
+    }
+}
+
+impl From<Fun> for Decl {
+    #[inline]
+    fn from(fun: Fun) -> Self {
+        Self::Fun(fun)
     }
 }
 
@@ -302,11 +347,26 @@ impl From<Stmt> for Decl {
     }
 }
 
+/// Function declaration of the form: `fun <IDENTIFIER> (<PARAMETERS>?) <BODY>`
+#[derive(Debug)]
+pub struct Fun {
+    pub func: Rc<Function>,
+    pub span: Span,
+}
+
+/// Function declaration of the form: `<IDENTIFIER> (<PARAMETERS>?) <BODY>`
+#[derive(Debug)]
+pub struct Function {
+    pub ident: String,
+    pub params: Vec<Ident>,
+    pub body: Block,
+    pub span: Span,
+}
+
 /// Variable declaration of the form: `var <IDENTIFIER> (=<EXPRESSION>)?;`
 #[derive(Debug)]
 pub struct Var {
-    // TODO: more efficient variable representation
-    pub ident: String,
+    pub ident: Ident,
     pub expr: Option<Expr>,
     pub span: Span,
 }

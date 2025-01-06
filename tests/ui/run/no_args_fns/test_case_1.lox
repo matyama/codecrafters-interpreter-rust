@@ -1,0 +1,4 @@
+fun foo() {
+  print 7;
+}
+foo();

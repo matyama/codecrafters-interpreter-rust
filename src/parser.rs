@@ -1,11 +1,12 @@
 use std::borrow::Cow;
 use std::iter::Peekable;
+use std::rc::Rc;
 use std::str::FromStr;
 
 use crate::error::SyntaxError;
 use crate::ir::{
-    self, AssignTarget, Atom, Block, Cons, Decl, Expr, If, Operator, Print, Program, Stmt, Var,
-    While,
+    self, AssignTarget, Atom, Block, Cons, Decl, Expr, Fun, Function, Ident, If, Operator, Print,
+    Program, Stmt, Var, While,
 };
 use crate::lexer::{Lexer, TokenStream};
 use crate::span::Span;
@@ -121,6 +122,23 @@ macro_rules! rule {
         }
     };
 
+    // models: fun_decl → "fun" function ;
+    ($head:ident -> "fun" $rule:ident ;) => {
+        fn $head(&mut self) -> Result<Option<Fun>, SyntaxError> {
+            let Some(mut span) = self.fun_keyword()? else {
+                return Ok(None);
+            };
+
+            let func = self.$rule()?;
+            span += &func.span;
+
+            Ok(Some(Fun {
+                func: Rc::new(func),
+                span,
+            }))
+        }
+    };
+
     // models var_decl → "var" IDENTIFIER ( "=" expression )? ";" ;
     ($head:ident -> $_kw:literal $ident:ident ( "=" $init:ident )? ";" ; # $t:ident) => {
         fn $head(&mut self) -> Result<Option<$t>, SyntaxError> {
@@ -144,8 +162,8 @@ macro_rules! rule {
             let _ = self.advance()?;
 
             // mandatory variable identifier
-            let (ident, s) = self.$ident()?;
-            span += s;
+            let ident = self.$ident(|| "IDENTIFIER after 'var'")?;
+            span += ident.span();
 
             // optional initializer expression
             let Ok(next) = self.peek() else {
@@ -174,7 +192,7 @@ macro_rules! rule {
 
             // parse ;
             span += self.semicolon(|| "after statement")?;
-            Ok(Some(Var { ident, expr, span }))
+            Ok(Some($t { ident, expr, span }))
         }
     };
 
@@ -359,6 +377,37 @@ macro_rules! rule {
         }
     };
 
+    // models: function → IDENTIFIER "(" parameters? ")" block ;
+    ($head:ident -> $ident:ident "(" $params:ident? ")" $block:ident ;) => {
+        fn $head(&mut self) -> Result<Function, SyntaxError> {
+            let Ident { name, mut span } = self.$ident(|| format!("{} name", stringify!($head)))?;
+
+            span += self.left_paren(|| format!("after {} name", stringify!($head)))?;
+
+            let mut params = Vec::new();
+
+            if let Some(s) = self.right_paren_token()? {
+                span += s;
+            } else {
+                span = self.$params(&mut params, span)?;
+                span += self.right_paren(|| format!("after {} name", stringify!($head)))?;
+            }
+
+            let Some(body) = self.$block()? else {
+                // failed to parse a block, let this parser fail with an appropriate error
+                let _ = self.left_brace(|| format!("before {} body", stringify!($head)))?;
+                unreachable!("{} can only start with a left brace", stringify!($block));
+            };
+
+            Ok(Function {
+                ident: name,
+                params,
+                body,
+                span,
+            })
+        }
+    };
+
     // models expr_stmt → expression ";" ;
     ($($head:ident -> $rule:ident ";" ; # $t:ty)+) => {
         $(
@@ -488,7 +537,7 @@ macro_rules! rule {
 
     // models: call → primary ( "(" arguments? ")" )* ;
     ($head:ident -> $rule0:ident ( "(" $rule:ident? ")" )* ; ) => {
-        fn call(&mut self) -> Result<Expr, SyntaxError> {
+        fn $head(&mut self) -> Result<Expr, SyntaxError> {
             let mut expr = self.$rule0()?;
 
             loop {
@@ -605,44 +654,57 @@ macro_rules! rule {
         }
     };
 
-    // models: arguments → expression ( "," expression )* ;
-    // TODO: reuse for function parameters
-    ($head:ident -> $rule:ident ( "," $_:ident )* ; # $limit:ident) => {
-        fn $head(&mut self, items: &mut Vec<Expr>, mut span: Span) -> Result<Span, SyntaxError> {
-            loop {
-                if items.len() >= $limit {
-                    let Ok(next) = self.peek() else {
-                        let Err(error) = self.advance() else {
-                            unreachable!("peeked an error");
+    // models:
+    //  - arguments  → expression ( "," expression )* ;
+    //  - parameters → IDENTIFIER ( "," IDENTIFIER )* ;
+    ($(
+        $head:ident -> $rule:ident ( "," $_:ident )* ; # $limit:ident: $t:ty $(, $ctx:expr)?
+    )+) => {
+        $(
+            fn $head(
+                &mut self,
+                items: &mut Vec<$t>,
+                mut span: Span,
+            ) -> Result<Span, SyntaxError> {
+                loop {
+                    if items.len() >= $limit {
+                        let Ok(next) = self.peek() else {
+                            let Err(error) = self.advance() else {
+                                unreachable!("peeked an error");
+                            };
+                            return Err(error);
                         };
-                        return Err(error);
+
+                        let msg = format!(
+                            "Can't have more than {} {}.",
+                            $limit,
+                            stringify!($head),
+                        );
+
+                        return Err(match next {
+                            Ok(t) => {
+                                span += &t.span;
+                                let loc = ErrLoc::at(&t.lexeme);
+                                self.error(span, msg, loc)
+                            }
+                            Err(s) => self.error(span + s, msg, ErrLoc::Eof),
+                        });
+                    }
+
+                    let item = self.$rule($($ctx)?)?;
+                    span += item.span();
+
+                    items.push(item);
+
+                    let Some(s) = self.comma_token()? else {
+                        break;
                     };
-
-                    let msg = format!("Can't have more than {} {}.", $limit, stringify!($head));
-
-                    return Err(match next {
-                        Ok(t) => {
-                            span += &t.span;
-                            let loc = ErrLoc::at(&t.lexeme);
-                            self.error(span, msg, loc)
-                        }
-                        Err(s) => self.error(span + s, msg, ErrLoc::Eof),
-                    });
+                    span += s;
                 }
 
-                let item = self.$rule()?;
-                span += item.span();
-
-                items.push(item);
-
-                let Some(s) = self.comma_token()? else {
-                    break;
-                };
-                span += s;
+                Ok(span)
             }
-
-            Ok(span)
-        }
+        )+
     };
 
     // matches an optional simple token or keyword (e.g., LeftBrace)
@@ -763,18 +825,25 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn identifier(&mut self) -> Result<(String, Span), SyntaxError> {
+    fn identifier<C, D>(&mut self, ctx: C) -> Result<Ident, SyntaxError>
+    where
+        D: std::fmt::Display,
+        C: Fn() -> D,
+    {
         match self.advance()? {
             Ok(LexToken {
                 token: Token::Literal(Literal::Ident(ident)),
                 span,
                 ..
-            }) => Ok((ident.to_string(), span.clone())),
+            }) => Ok(Ident {
+                name: ident.to_string(),
+                span: span.clone(),
+            }),
 
             Ok(LexToken { lexeme, span, .. }) => {
                 let span = span.clone();
                 let loc = ErrLoc::at(lexeme);
-                let msg = "Expect IDENTIFIER after 'var'.";
+                let msg = format!("Expect {}.", ctx());
                 Err(self.error(span, msg, loc))
             }
 
@@ -782,7 +851,7 @@ impl<'a> Parser<'a> {
                 // FIXME: proper span
                 let mut span = Span::empty();
                 span.lineno = lineno;
-                let msg = "Expect IDENTIFIER after 'var'.";
+                let msg = format!("Expect {}.", ctx());
                 Err(self.error(span, msg, ErrLoc::Eof))
             }
         }
@@ -791,8 +860,10 @@ impl<'a> Parser<'a> {
     /// Parse a sequence of tokens according to the following grammar:
     /// ```text
     /// program        → declaration* EOF ;
-    /// declaration    → var_decl
+    /// declaration    → fun_decl
+    ///                | var_decl
     ///                | statement ;
+    /// fun_decl       → "fun" function ;
     /// var_decl       → "var" IDENTIFIER ( "=" expression )? ";" ;
     /// statement      → expr_stmt
     ///                | if_stmt
@@ -807,6 +878,7 @@ impl<'a> Parser<'a> {
     ///                  statement ;
     /// print_stmt     → "print" expression ";" ;
     /// block          → "{" declaration* "}" ;
+    /// function       → IDENTIFIER "(" parameters? ")" block ;
     /// expression     → assignment ;
     /// assignment     → IDENTIFIER "=" assignment
     ///                | logic_or ;
@@ -824,6 +896,7 @@ impl<'a> Parser<'a> {
     ///                | IDENTIFIER ;
     ///
     /// arguments      → expression ( "," expression )* ;
+    /// parameters     → IDENTIFIER ( "," IDENTIFIER )* ;
     /// ```
     #[inline]
     pub fn parse_prog(mut self) -> Result<Program, SyntaxError> {
@@ -860,7 +933,7 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        declaration -> statement | var_decl ;                                             #  Decl
+        declaration -> statement | var_decl | fun_decl ;                                  #  Decl
         statement   -> expr_stmt | if_stmt | while_stmt | for_stmt | print_stmt | block ; #  Stmt
         expression  -> assignment ;                                                       #  Expr
     }
@@ -870,11 +943,19 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
+        fun_decl    -> "fun" function ;
+    }
+
+    rule! {
         var_decl    -> "var" identifier ( "=" expression )? ";" ; #  Var
     }
 
     rule! {
         block       -> "{" declaration* "}" ;
+    }
+
+    rule! {
+        function    -> identifier "(" parameters? ")" block ;
     }
 
     rule! {
@@ -920,7 +1001,8 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        arguments   -> expression ( "," expression )* ;  # MAX_ARGS
+        arguments   -> expression ( "," expression )* ;  # MAX_ARGS: Expr
+        parameters  -> identifier ( "," identifier )* ;  # MAX_ARGS: Ident, || "parameter name"
     }
 
     rule! {
@@ -933,12 +1015,14 @@ impl<'a> Parser<'a> {
         else_keyword?         Keyword(Else) ;
         while_keyword?        Keyword(While) ;
         for_keyword?          Keyword(For) ;
+        fun_keyword?          Keyword(Fun) ;
     }
 
     rule! {
         semicolon: Semicolon;
         left_paren: LeftParen;
         right_paren: RightParen;
+        left_brace: LeftBrace;
         right_brace: RightBrace;
     }
 }
