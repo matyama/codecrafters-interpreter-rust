@@ -390,7 +390,7 @@ macro_rules! rule {
                 span += s;
             } else {
                 span = self.$params(&mut params, span)?;
-                span += self.right_paren(|| format!("after {} name", stringify!($head)))?;
+                span += self.right_paren(|| format!("after {}", stringify!($params)))?;
             }
 
             let Some(body) = self.$block()? else {
@@ -448,7 +448,7 @@ macro_rules! rule {
                 span += expr.span();
 
                 // parse ;
-                span += self.semicolon(|| "after statement")?;
+                span += self.semicolon(|| "after value")?;
                 Ok(Some($t { expr, span }))
             }
         )+
