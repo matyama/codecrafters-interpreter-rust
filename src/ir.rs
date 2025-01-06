@@ -371,7 +371,6 @@ pub struct Var {
     pub span: Span,
 }
 
-// TODO: represent statements as S-expressions
 #[derive(Debug)]
 pub enum Stmt {
     Block(Block),
@@ -379,6 +378,7 @@ pub enum Stmt {
     While(While),
     Expr(Expr),
     Print(Print),
+    Return(Return),
 }
 
 impl Stmt {
@@ -390,6 +390,7 @@ impl Stmt {
             Self::While(While { span, .. }) => span,
             Self::Expr(expr) => expr.span(),
             Self::Print(Print { span, .. }) => span,
+            Self::Return(Return { span, .. }) => span,
         }
     }
 }
@@ -429,6 +430,13 @@ impl From<Print> for Stmt {
     }
 }
 
+impl From<Return> for Stmt {
+    #[inline]
+    fn from(ret: Return) -> Self {
+        Self::Return(ret)
+    }
+}
+
 #[derive(Debug)]
 pub struct Block {
     pub(crate) decls: Vec<Decl>,
@@ -453,6 +461,12 @@ pub struct While {
 #[derive(Debug)]
 pub struct Print {
     pub(crate) expr: Expr,
+    pub(crate) span: Span,
+}
+
+#[derive(Debug)]
+pub struct Return {
+    pub(crate) value: Option<Expr>,
     pub(crate) span: Span,
 }
 

@@ -6,7 +6,7 @@ use std::str::FromStr;
 use crate::error::SyntaxError;
 use crate::ir::{
     self, AssignTarget, Atom, Block, Cons, Decl, Expr, Fun, Function, Ident, If, Operator, Print,
-    Program, Stmt, Var, While,
+    Program, Return, Stmt, Var, While,
 };
 use crate::lexer::{Lexer, TokenStream};
 use crate::span::Span;
@@ -454,6 +454,26 @@ macro_rules! rule {
         )+
     };
 
+    ($head:ident -> "return" $rule:ident? ";" ;) => {
+        fn $head(&mut self) -> Result<Option<Return>, SyntaxError> {
+            let Some(mut span) = self.return_keyword()? else {
+                return Ok(None);
+            };
+
+            // NOTE: semicolon cannot start an expression
+            let value = if let Some(s) = self.semicolon_token()? {
+                span += s;
+                None
+            } else {
+                let expr = self.expression()?;
+                span += self.semicolon(|| "after return value")?;
+                Some(expr)
+            };
+
+            Ok(Some(Return { value, span }))
+        }
+    };
+
     // models:
     //  - logic_or  → logic_and ( "or" logic_and )* ;
     //  - logic_and → equality ( "and" equality )* ;
@@ -870,6 +890,7 @@ impl<'a> Parser<'a> {
     ///                | while_stmt
     ///                | for_stmt
     ///                | print_stmt
+    ///                | return_stmt
     ///                | block ;
     /// expr_stmt      → expression ";" ;
     /// if_stmt        → "if" "(" expression ")" statement ( "else" statement )? ;
@@ -877,6 +898,7 @@ impl<'a> Parser<'a> {
     /// for_stmt       → "for" "(" ( var_decl | expr_stmt | ";" ) expression? ";" expression? ")"
     ///                  statement ;
     /// print_stmt     → "print" expression ";" ;
+    /// return_stmt    → "return" expression? ";" ;
     /// block          → "{" declaration* "}" ;
     /// function       → IDENTIFIER "(" parameters? ")" block ;
     /// expression     → assignment ;
@@ -934,7 +956,8 @@ impl<'a> Parser<'a> {
 
     rule! {
         declaration -> statement | var_decl | fun_decl ;                                  #  Decl
-        statement   -> expr_stmt | if_stmt | while_stmt | for_stmt | print_stmt | block ; #  Stmt
+        statement   -> expr_stmt | if_stmt | while_stmt | for_stmt | print_stmt | return_stmt
+                       | block ; #  Stmt
         expression  -> assignment ;                                                       #  Expr
     }
 
@@ -980,6 +1003,10 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
+        return_stmt -> "return" expression? ";" ;
+    }
+
+    rule! {
         logic_or    -> logic_and ( (Keyword(Or))  logic_and )* ;
         logic_and   -> equality  ( (Keyword(And)) equality  )* ;
         equality    -> comparison ( (BangEqual | EqualEqual) comparison)* ;
@@ -1016,6 +1043,7 @@ impl<'a> Parser<'a> {
         while_keyword?        Keyword(While) ;
         for_keyword?          Keyword(For) ;
         fun_keyword?          Keyword(Fun) ;
+        return_keyword?       Keyword(Return) ;
     }
 
     rule! {

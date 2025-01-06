@@ -1,29 +1,31 @@
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::hash_map::{Entry, HashMap};
 use std::fmt::Display;
 use std::io::Write;
-use std::ptr::NonNull;
+use std::mem;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use crate::error::{RuntimeError, ThrowRuntimeError as _};
 use crate::ir::{
-    Atom, Block, Cons, Decl, Expr, Fun, Function, If, Literal, Operator, Print, Program, Stmt, Var,
-    While,
+    Atom, Block, Cons, Decl, Expr, Fun, Function, If, Literal, Operator, Print, Program, Return,
+    Stmt, Var, While,
 };
 use crate::span::Span;
 
+type RcCell<T> = Rc<RefCell<T>>;
+
 #[inline]
 pub fn evaluate<W: Write>(expr: Expr, writer: &mut W) -> Result<Value, RuntimeError> {
-    let mut globals = Environment::global();
-    let mut cx = Context::new(&mut globals, writer);
+    let mut cx = Context::new(writer);
     expr.evaluate(&mut cx)
 }
 
 #[inline]
 pub fn interpret<W: Write>(prog: Program, writer: &mut W) -> Result<(), RuntimeError> {
-    let mut globals = Environment::global();
-    let mut cx = Context::new(&mut globals, writer);
-    prog.interpret(&mut cx)
+    let mut cx = Context::new(writer);
+    prog.interpret(&mut cx).map(|_| ())
 }
 
 // TODO: GC with tracing to collect cyclic object graphs
@@ -241,6 +243,12 @@ impl Call for Native {
     }
 }
 
+// TODO: we need to store additional data (e.g., closure) other than just the declaration
+//struct Callable {
+//    declaration: Rc<Function>,
+//    closure: RcCell<Environment>,
+//}
+
 impl Display for Function {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -255,23 +263,31 @@ impl Call for Function {
     }
 
     fn call(&self, args: Vec<Value>, cx: &mut Context) -> Result<Value, RuntimeError> {
+        // TODO: scope the environment from function's closure rather than globals
         // create fresh environment (initialized only from globals)
-        // SAFETY: globals and original cx remain valid for the whole call
-        let environment = unsafe { cx.globals.scope() };
+        let environment = Environment::scope(Rc::clone(&cx.globals));
 
-        let mut closure = Context {
-            environment,
-            globals: cx.globals,
-            writer: cx.writer,
-        };
+        let prev = mem::replace(&mut cx.environment, environment);
 
         // associate all parameters with their corresponding argument values
-        for (param, value) in self.params.iter().zip(args) {
-            closure.environment.define(param.name(), Some(value));
+        {
+            let mut env = cx.environment.borrow_mut();
+            for (param, value) in self.params.iter().zip(args) {
+                env.define(param.name(), Some(value));
+            }
         }
 
         // execute function's body under the appropriate context
-        self.body.interpret(&mut closure).map(|_| Value::Nil)
+        let result = self.body.interpret(cx).map(|v| match v {
+            // NOTE: `.break_value().unwrap_or_default()`, but break_value is not available in 1.77
+            ControlFlow::Break(v) => v,
+            ControlFlow::Continue(()) => Value::Nil,
+        });
+
+        // restore previous environment before returning
+        cx.environment = prev;
+
+        result
     }
 }
 
@@ -280,7 +296,7 @@ struct Environment {
     /// (global) bindings of variable names to their values
     bindings: HashMap<String, Value>,
     /// parent context (`None` indicates the global scope)
-    enclosing: Option<NonNull<Environment>>,
+    enclosing: Option<RcCell<Environment>>,
 }
 
 impl Environment {
@@ -300,15 +316,11 @@ impl Environment {
         globals
     }
 
-    /// ### Safety
-    ///
-    /// The caller must ensure that `&mut self` remains valid for the lifetime of the returned
-    /// scoped [Context].
-    unsafe fn scope(&mut self) -> Self {
-        Self {
+    fn scope(enclosing: RcCell<Self>) -> RcCell<Self> {
+        Rc::new(RefCell::new(Self {
             bindings: HashMap::new(),
-            enclosing: NonNull::new(self as *mut Self),
-        }
+            enclosing: Some(enclosing),
+        }))
     }
 
     #[inline]
@@ -318,10 +330,16 @@ impl Environment {
     }
 
     /// Register new assignment `var := val` and return new `val`
-    fn assign(&mut self, var: &str, val: Value, span: &Span) -> Result<Value, RuntimeError> {
+    fn assign(
+        mut this: RcCell<Self>,
+        var: &str,
+        val: Value,
+        span: &Span,
+    ) -> Result<Value, RuntimeError> {
         let mut var = var.to_string();
-        let mut env = self;
         loop {
+            let mut env = this.borrow_mut();
+
             match env.bindings.entry(var) {
                 Entry::Occupied(mut entry) => {
                     let _ = entry.insert(val);
@@ -331,34 +349,35 @@ impl Environment {
                 Entry::Vacant(entry) => {
                     var = entry.into_key();
 
-                    let Some(mut enclosing) = env.enclosing else {
+                    let Some(ref enclosing) = env.enclosing else {
                         break Err(span.throw(format!("Undefined variable '{var}'.")));
                     };
 
-                    // SAFETY: Scope contexts are created from an exclusive reference to the parent
-                    // environment, which remains valid until the block is fully interpreted.
-                    env = unsafe { enclosing.as_mut() };
+                    // hacky `this = Rc::clone(enclosing);` to make the borrow-checker happy
+                    let parent = Rc::clone(enclosing);
+                    drop(env);
+                    this = parent;
                 }
             }
         }
     }
 
-    fn get(&self, var: &str, span: &Span) -> Result<Value, RuntimeError> {
-        let mut env = self;
-
+    fn get(mut this: RcCell<Self>, var: &str, span: &Span) -> Result<Value, RuntimeError> {
         loop {
+            let env = this.borrow();
             match env.bindings.get(var) {
                 // NOTE: objects are ref-counted, so this should be cheap
                 Some(val) => break Ok(val.clone()),
 
                 None => {
-                    let Some(enclosing) = env.enclosing else {
+                    let Some(ref enclosing) = env.enclosing else {
                         break Err(span.throw(format!("Undefined variable '{var}'.")));
                     };
 
-                    // SAFETY: Scope contexts are created from an exclusive reference to the parent
-                    // environment, which remains valid until the block is fully interpreted.
-                    env = unsafe { enclosing.as_ref() };
+                    // hacky `this = Rc::clone(enclosing);` to make the borrow-checker happy
+                    let parent = Rc::clone(enclosing);
+                    drop(env);
+                    this = parent;
                 }
             }
         }
@@ -366,16 +385,16 @@ impl Environment {
 }
 
 struct Context<'a> {
-    environment: Environment,
-    globals: &'a mut Environment,
+    environment: RcCell<Environment>,
+    globals: RcCell<Environment>,
     writer: &'a mut dyn Write,
 }
 
 impl<'a> Context<'a> {
-    fn new<W: Write>(globals: &'a mut Environment, writer: &'a mut W) -> Self {
+    fn new<W: Write>(writer: &'a mut W) -> Self {
+        let globals = Rc::new(RefCell::new(Environment::global()));
         Self {
-            // SAFETY: we keep &mut globals around for the whole lifetime of this context
-            environment: unsafe { globals.scope() },
+            environment: Rc::clone(&globals),
             globals,
             writer,
         }
@@ -386,7 +405,7 @@ impl std::fmt::Debug for Context<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Context")
             .field("environment", &self.environment)
-            .field("globals", self.globals)
+            .field("globals", &self.globals)
             .finish_non_exhaustive()
     }
 }
@@ -409,7 +428,7 @@ impl Evaluate for Atom {
     #[inline]
     fn evaluate(&self, cx: &mut Context) -> Result<Value, RuntimeError> {
         Ok(match &self.literal {
-            Literal::Ident(x) => cx.environment.get(x, &self.span)?,
+            Literal::Ident(x) => Environment::get(Rc::clone(&cx.environment), x, &self.span)?,
             Literal::Str(s) => Value::obj(Rc::clone(s)),
             Literal::Num(n) => Value::new(*n),
             Literal::Bool(b) => Value::new(*b),
@@ -447,7 +466,8 @@ impl Evaluate for Cons {
 
                 // NOTE: assignment evaluates to the expression (rhs) value
                 //  - This is for cases such as `var a = b = 1;`
-                cx.environment.assign(var, val, &self.span)
+                let env = Rc::clone(&cx.environment);
+                Environment::assign(env, var, val, &self.span)
             }
 
             Operator::Bang => match self.args.as_slice() {
@@ -677,19 +697,22 @@ impl Evaluate for Cons {
 }
 
 trait Interpret {
-    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError>;
+    fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError>;
 }
 
 impl Interpret for Program {
-    #[inline]
-    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
-        self.0.iter().try_for_each(|decl| decl.interpret(cx))
+    fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
+        for decl in self.0.iter() {
+            if let ret @ ControlFlow::Break(_) = decl.interpret(cx)? {
+                return Ok(ret);
+            }
+        }
+        Ok(ControlFlow::Continue(()))
     }
 }
 
 impl Interpret for Decl {
-    #[inline]
-    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
+    fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         match self {
             Self::Fun(fun) => fun.interpret(cx),
             Self::Var(var) => var.interpret(cx),
@@ -699,81 +722,86 @@ impl Interpret for Decl {
 }
 
 impl Interpret for Fun {
-    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
+    fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         let ident = &self.func.ident;
         let func = Rc::clone(&self.func);
-        cx.environment.define(ident, Some(Value::obj(func)));
-        Ok(())
+        // TODO: register this env (where func is declared) alongside as the "closure"
+        cx.environment
+            .borrow_mut()
+            .define(ident, Some(Value::obj(func)));
+        Ok(ControlFlow::Continue(()))
     }
 }
 
 impl Interpret for Var {
-    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
+    fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         let value = self
             .expr
             .as_ref()
             .map(|expr| expr.evaluate(cx))
             .transpose()?;
 
-        cx.environment.define(self.ident.name(), value);
-        Ok(())
+        cx.environment.borrow_mut().define(self.ident.name(), value);
+        Ok(ControlFlow::Continue(()))
     }
 }
 
 impl Interpret for Stmt {
-    #[inline]
-    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
+    fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         match self {
             Self::Block(block) => block.interpret(cx),
             Self::If(if_stmt) => if_stmt.interpret(cx),
             Self::While(while_stmt) => while_stmt.interpret(cx),
-            Self::Expr(expr) => expr.evaluate(cx).map(|_| ()),
+            Self::Expr(expr) => expr.evaluate(cx).map(|_| ControlFlow::Continue(())),
             Self::Print(print) => print.interpret(cx),
+            Self::Return(ret) => ret.interpret(cx),
         }
     }
 }
 
 impl Interpret for Block {
-    #[inline]
-    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
-        let mut local = Context {
-            // SAFETY: `local` remains valid for the remainder of this block's interpretation
-            environment: unsafe { cx.environment.scope() },
-            globals: cx.globals,
-            writer: cx.writer,
-        };
+    fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
+        let environment = Environment::scope(Rc::clone(&cx.environment));
 
-        self.decls
-            .iter()
-            .try_for_each(|decl| decl.interpret(&mut local))
+        let prev = mem::replace(&mut cx.environment, environment);
+
+        for decl in self.decls.iter() {
+            if let ret @ ControlFlow::Break(_) = decl.interpret(cx)? {
+                let _ = mem::replace(&mut cx.environment, prev);
+                return Ok(ret);
+            }
+        }
+
+        let _ = mem::replace(&mut cx.environment, prev);
+        Ok(ControlFlow::Continue(()))
     }
 }
 
 impl Interpret for If {
-    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
-        let cond = self.cond.evaluate(cx)?;
-
-        if cond.into() {
-            self.then_branch.interpret(cx)?;
+    fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
+        if self.cond.evaluate(cx)?.into() {
+            self.then_branch.interpret(cx)
         } else if let Some(ref else_branch) = self.else_branch {
-            else_branch.interpret(cx)?;
+            else_branch.interpret(cx)
+        } else {
+            Ok(ControlFlow::Continue(()))
         }
-
-        Ok(())
     }
 }
 
 impl Interpret for While {
-    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
+    fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         while self.cond.evaluate(cx)?.into() {
-            self.body.interpret(cx)?;
+            if let ret @ ControlFlow::Break(_) = self.body.interpret(cx)? {
+                return Ok(ret);
+            }
         }
-        Ok(())
+        Ok(ControlFlow::Continue(()))
     }
 }
 
 impl Interpret for Print {
-    fn interpret(&self, cx: &mut Context) -> Result<(), RuntimeError> {
+    fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         let value = self.expr.evaluate(cx)?;
 
         // FIXME: Call instances can be printed, but panic if behind a Value::Object
@@ -784,7 +812,19 @@ impl Interpret for Print {
         } else {
             writeln!(cx.writer, "{value}")
         }
+        .map(ControlFlow::Continue)
         .map_err(move |error| self.span.throw(error))
+    }
+}
+
+impl Interpret for Return {
+    fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
+        self.value
+            .as_ref()
+            .map(|v| v.evaluate(cx))
+            .transpose()
+            .map(|v| v.unwrap_or_default())
+            .map(ControlFlow::Break)
     }
 }
 
