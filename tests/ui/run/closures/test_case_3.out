@@ -1,0 +1,6 @@
+debug: Starting
+debug: Processing
+debug: Finishing
+debug: Extra line
+error: Failed!
+error: Retrying...

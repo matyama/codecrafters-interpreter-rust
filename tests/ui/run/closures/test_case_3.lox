@@ -1,0 +1,26 @@
+fun makeLogger(prefix) {
+  var logCount = 0;
+
+  fun log(message) {
+    logCount = logCount + 1;
+    print prefix + ": " + message;
+
+    if (logCount > 6) {
+      print prefix + ": Too many log lines!";
+      logCount = 0;
+    }
+  }
+
+  return log;
+}
+
+var debugLog = makeLogger("debug");
+var errorLog = makeLogger("error");
+
+debugLog("Starting");
+debugLog("Processing");
+debugLog("Finishing");
+debugLog("Extra line");
+
+errorLog("Failed!");
+errorLog("Retrying...");
