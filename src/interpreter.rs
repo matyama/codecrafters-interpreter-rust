@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use crate::error::{RuntimeError, ThrowRuntimeError as _};
 use crate::ir::{
-    Atom, Block, Cons, Decl, Expr, Fun, Function, If, Literal, Operator, Print, Program, Return,
-    Stmt, Var, While,
+    self, Atom, Block, Cons, Decl, Expr, Fun, If, Literal, Operator, Print, Program, Return, Stmt,
+    Var, While,
 };
 use crate::span::Span;
 
@@ -243,42 +243,43 @@ impl Call for Native {
     }
 }
 
-// TODO: we need to store additional data (e.g., closure) other than just the declaration
-//struct Callable {
-//    declaration: Rc<Function>,
-//    closure: RcCell<Environment>,
-//}
+#[derive(Debug)]
+struct Function {
+    /// representation of function's parameters and body
+    declaration: Rc<ir::Function>,
+    /// environment holding the surrounding variables where the function is declared
+    closure: RcCell<Environment>,
+}
 
 impl Display for Function {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<fn {}>", self.ident)
+        write!(f, "<fn {}>", self.declaration.ident)
     }
 }
 
 impl Call for Function {
     #[inline]
     fn arity(&self) -> usize {
-        self.params.len()
+        self.declaration.params.len()
     }
 
     fn call(&self, args: Vec<Value>, cx: &mut Context) -> Result<Value, RuntimeError> {
-        // TODO: scope the environment from function's closure rather than globals
-        // create fresh environment (initialized only from globals)
-        let environment = Environment::scope(Rc::clone(&cx.globals));
+        // create fresh environment (initialized from this function's closure)
+        let environment = Environment::scope(Rc::clone(&self.closure));
 
         let prev = mem::replace(&mut cx.environment, environment);
 
         // associate all parameters with their corresponding argument values
         {
             let mut env = cx.environment.borrow_mut();
-            for (param, value) in self.params.iter().zip(args) {
+            for (param, value) in self.declaration.params.iter().zip(args) {
                 env.define(param.name(), Some(value));
             }
         }
 
         // execute function's body under the appropriate context
-        let result = self.body.interpret(cx).map(|v| match v {
+        let result = self.declaration.body.interpret(cx).map(|v| match v {
             // NOTE: `.break_value().unwrap_or_default()`, but break_value is not available in 1.77
             ControlFlow::Break(v) => v,
             ControlFlow::Continue(()) => Value::Nil,
@@ -724,11 +725,17 @@ impl Interpret for Decl {
 impl Interpret for Fun {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         let ident = &self.func.ident;
-        let func = Rc::clone(&self.func);
-        // TODO: register this env (where func is declared) alongside as the "closure"
+
+        // capture the environment in which the function is declared
+        let func = Function {
+            declaration: Rc::clone(&self.func),
+            closure: Rc::clone(&cx.environment),
+        };
+
         cx.environment
             .borrow_mut()
-            .define(ident, Some(Value::obj(func)));
+            .define(ident, Some(Value::new(func)));
+
         Ok(ControlFlow::Continue(()))
     }
 }
