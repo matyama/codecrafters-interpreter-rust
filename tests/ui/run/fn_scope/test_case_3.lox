@@ -1,0 +1,14 @@
+var counter = 99;
+{
+  counter = counter + 5;
+  {
+    counter = counter + 5;
+    print counter;
+  }
+}
+print counter;
+{
+  var counter = 99;
+  print counter;
+}
+print counter;
