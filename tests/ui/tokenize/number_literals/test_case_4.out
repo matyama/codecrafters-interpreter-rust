@@ -1,0 +1,16 @@
+LEFT_PAREN ( null
+NUMBER 5 5.0
+PLUS + null
+NUMBER 3 3.0
+RIGHT_PAREN ) null
+GREATER > null
+NUMBER 7 7.0
+SEMICOLON ; null
+STRING "Success" Success
+BANG_EQUAL != null
+STRING "Failure" Failure
+[line 1] Error: Unexpected character: &
+NUMBER 10 10.0
+GREATER_EQUAL >= null
+NUMBER 5 5.0
+EOF  null

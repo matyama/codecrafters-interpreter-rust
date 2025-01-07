@@ -1,0 +1,11 @@
+LEFT_BRACE { null
+RIGHT_BRACE } null
+LEFT_PAREN ( null
+LEFT_PAREN ( null
+COMMA , null
+DOT . null
+LESS < null
+MINUS - null
+RIGHT_PAREN ) null
+RIGHT_PAREN ) null
+EOF  null

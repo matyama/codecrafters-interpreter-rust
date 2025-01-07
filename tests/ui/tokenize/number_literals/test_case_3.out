@@ -1,0 +1,9 @@
+STRING "Hello" Hello
+EQUAL = null
+STRING "Hello" Hello
+[line 1] Error: Unexpected character: &
+[line 1] Error: Unexpected character: &
+NUMBER 42 42.0
+EQUAL_EQUAL == null
+NUMBER 42 42.0
+EOF  null

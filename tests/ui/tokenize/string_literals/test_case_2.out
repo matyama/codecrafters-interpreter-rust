@@ -1,0 +1,3 @@
+STRING "world" world
+[line 1] Error: Unterminated string.
+EOF  null

@@ -1,0 +1,10 @@
+STRING "foo" foo
+PLUS + null
+STRING "hello" hello
+STRING "perseverance" perseverance
+[line 1] Error: Unexpected character: &
+[line 1] Error: Unexpected character: &
+STRING "Success" Success
+BANG_EQUAL != null
+STRING "Failure" Failure
+EOF  null

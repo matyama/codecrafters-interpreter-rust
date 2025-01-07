@@ -1,0 +1,8 @@
+LEFT_PAREN ( null
+RIGHT_PAREN ) null
+LEFT_BRACE { null
+LESS_EQUAL <= null
+GREATER > null
+[line 1] Error: Unexpected character: #
+RIGHT_BRACE } null
+EOF  null

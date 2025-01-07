@@ -1,0 +1,9 @@
+LEFT_BRACE { null
+LEFT_PAREN ( null
+[line 1] Error: Unexpected character: $
+[line 1] Error: Unexpected character: #
+BANG_EQUAL != null
+BANG_EQUAL != null
+RIGHT_PAREN ) null
+RIGHT_BRACE } null
+EOF  null

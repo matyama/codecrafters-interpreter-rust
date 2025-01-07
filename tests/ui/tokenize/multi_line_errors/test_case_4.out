@@ -1,0 +1,7 @@
+LEFT_PAREN ( null
+LEFT_BRACE { null
+DOT . null
+[line 1] Error: Unexpected character: #
+RIGHT_BRACE } null
+RIGHT_PAREN ) null
+EOF  null

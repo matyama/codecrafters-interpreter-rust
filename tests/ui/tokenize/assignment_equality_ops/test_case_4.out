@@ -1,0 +1,10 @@
+LEFT_PAREN ( null
+LEFT_PAREN ( null
+[line 1] Error: Unexpected character: $
+[line 1] Error: Unexpected character: %
+EQUAL = null
+[line 1] Error: Unexpected character: #
+[line 1] Error: Unexpected character: @
+RIGHT_PAREN ) null
+RIGHT_PAREN ) null
+EOF  null

@@ -1,0 +1,44 @@
+LEFT_BRACE { null
+IDENTIFIER str1 null
+EQUAL = null
+STRING "Test" Test
+IDENTIFIER str2 null
+EQUAL = null
+STRING "Case" Case
+IDENTIFIER num1 null
+EQUAL = null
+NUMBER 100 100.0
+IDENTIFIER num2 null
+EQUAL = null
+NUMBER 200.00 200.0
+IDENTIFIER result null
+EQUAL = null
+LEFT_PAREN ( null
+IDENTIFIER str1 null
+EQUAL_EQUAL == null
+STRING "Test" Test
+COMMA , null
+IDENTIFIER str2 null
+BANG_EQUAL != null
+STRING "Fail" Fail
+RIGHT_PAREN ) null
+[line 6] Error: Unexpected character: &
+[line 6] Error: Unexpected character: &
+LEFT_PAREN ( null
+IDENTIFIER num1 null
+PLUS + null
+IDENTIFIER num2 null
+RIGHT_PAREN ) null
+GREATER_EQUAL >= null
+NUMBER 300 300.0
+[line 6] Error: Unexpected character: &
+[line 6] Error: Unexpected character: &
+LEFT_PAREN ( null
+IDENTIFIER a null
+MINUS - null
+IDENTIFIER b null
+RIGHT_PAREN ) null
+LESS < null
+NUMBER 10 10.0
+RIGHT_BRACE } null
+EOF  null

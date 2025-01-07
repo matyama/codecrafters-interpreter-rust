@@ -1,0 +1,15 @@
+LEFT_PAREN ( null
+RIGHT_PAREN ) null
+[line 1] Error: Unexpected character: #
+LEFT_BRACE { null
+RIGHT_BRACE } null
+[line 2] Error: Unexpected character: @
+[line 3] Error: Unexpected character: $
+PLUS + null
+PLUS + null
+PLUS + null
+PLUS + null
+PLUS + null
+PLUS + null
+[line 7] Error: Unexpected character: #
+EOF  null

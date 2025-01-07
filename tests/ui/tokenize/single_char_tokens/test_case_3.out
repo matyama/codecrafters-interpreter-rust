@@ -1,0 +1,8 @@
+STAR * null
+MINUS - null
+MINUS - null
+SEMICOLON ; null
+COMMA , null
+PLUS + null
+DOT . null
+EOF  null
