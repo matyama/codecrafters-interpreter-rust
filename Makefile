@@ -6,4 +6,4 @@ test: $(TESTS)
 
 .PHONY: $(TESTS)
 $(TESTS):
-	./tests/$@.sh
+	./tests/test.sh $(@:test-%=%)
