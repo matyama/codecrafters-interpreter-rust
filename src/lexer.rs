@@ -62,6 +62,14 @@ impl<'prg> TokenStream<'prg> {
         source: impl Into<Box<dyn std::error::Error + 'static>>,
     ) -> SyntaxError {
         let span = self.span(start, self.pos - start);
+        self.error_from(span, source)
+    }
+
+    fn error_from(
+        &self,
+        span: Span,
+        source: impl Into<Box<dyn std::error::Error + 'static>>,
+    ) -> SyntaxError {
         let code = span.snippet(self.prg).to_string();
         SyntaxError {
             span,
@@ -199,6 +207,9 @@ impl<'prg> Iterator for TokenStream<'prg> {
 
                 // literal: string
                 '"' => {
+                    let lineno = self.line + 1;
+                    let lineof = self.line_pos;
+
                     self.visit_until(double_quote, |s, c| {
                         if newline(c) {
                             s.line += 1;
@@ -210,7 +221,14 @@ impl<'prg> Iterator for TokenStream<'prg> {
                     if self.chars.next().is_some() {
                         self.advance_pos();
                     } else {
-                        return Some(Err(self.error(start, "Unterminated string.")));
+                        // NOTE: imbalanced string quotes require manual tracking of the init line
+                        let span = Span {
+                            offset: start,
+                            length: self.pos - start,
+                            lineno,
+                            lineof,
+                        };
+                        return Some(Err(self.error_from(span, "Unterminated string.")));
                     };
 
                     let lexeme = &self.prg[start..self.pos];

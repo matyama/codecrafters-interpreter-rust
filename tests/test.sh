@@ -22,12 +22,15 @@ function run_test {
 	local output="${outdir}/$(basename $expected)"
 
 	./your_program.sh "${COMMAND}" "${input}" &>"${output}"
+	local status="$?"
 
-	if diff "${output}" "${expected}"; then
+	if diff --color=auto "${output}" "${expected}"; then
 		echo "✔ Test passed"
 	else
 		echo "𐄂 Test failed"
 	fi
+
+	return "${status}"
 }
 
 success=true
