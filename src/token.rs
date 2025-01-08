@@ -60,6 +60,13 @@ impl<'a> TryFrom<Cow<'a, str>> for Keyword {
     }
 }
 
+impl AsRef<str> for Keyword {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        self.into()
+    }
+}
+
 impl From<Keyword> for &'static str {
     fn from(keyword: Keyword) -> Self {
         match keyword {

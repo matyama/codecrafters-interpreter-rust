@@ -3,6 +3,7 @@ mod interpreter;
 mod ir;
 mod lexer;
 mod parser;
+mod resolver;
 mod span;
 mod token;
 
@@ -12,7 +13,7 @@ use std::io::{self, BufWriter, Write as _};
 use std::path::Path;
 use std::process::{ExitCode, Termination};
 
-use ir::{Expr, Program};
+use ir::{Ast, Expr};
 use lexer::Lexer;
 use token::EOF;
 
@@ -59,9 +60,9 @@ fn main() -> impl Termination {
         "parse" => {
             let source = read_file_contents(filename);
 
-            match source.parse::<Expr>() {
-                Ok(expr) => {
-                    println!("{expr}");
+            match source.parse::<Ast<Expr>>() {
+                Ok(Ast { tree, .. }) => {
+                    println!("{tree}");
                     ExitCode::SUCCESS
                 }
                 Err(error) => {
@@ -74,15 +75,17 @@ fn main() -> impl Termination {
         "evaluate" => {
             let source = read_file_contents(filename);
 
-            let expr = match source.parse::<Expr>() {
-                Ok(expr) => expr,
+            let analyze = |ast| resolver::resolve(&source, ast);
+
+            let ast = match source.parse().and_then(analyze) {
+                Ok(ast) => ast,
                 Err(error) => return error.report(),
             };
 
             let stdout = io::stdout().lock();
             let mut writer = BufWriter::new(stdout);
 
-            let result = interpreter::evaluate(expr, &mut writer);
+            let result = interpreter::evaluate(ast, &mut writer);
 
             if let Err(error) = writer.flush() {
                 eprintln!("{error}");
@@ -104,8 +107,10 @@ fn main() -> impl Termination {
         "run" => {
             let source = read_file_contents(filename);
 
-            let prog = match source.parse::<Program>() {
-                Ok(prog) => prog,
+            let analyze = |ast| resolver::resolve(&source, ast);
+
+            let ast = match source.parse().and_then(analyze) {
+                Ok(ast) => ast,
                 Err(error) => {
                     eprintln!("{error}");
                     return error.report();
@@ -115,7 +120,7 @@ fn main() -> impl Termination {
             let stdout = io::stdout().lock();
             let mut writer = BufWriter::new(stdout);
 
-            let result = interpreter::interpret(prog, &mut writer);
+            let result = interpreter::interpret(ast, &mut writer);
 
             if let Err(error) = writer.flush() {
                 eprintln!("{error}");

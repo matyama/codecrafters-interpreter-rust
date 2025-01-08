@@ -17,15 +17,17 @@ use crate::span::Span;
 type RcCell<T> = Rc<RefCell<T>>;
 
 #[inline]
-pub fn evaluate<W: Write>(expr: Expr, writer: &mut W) -> Result<Value, RuntimeError> {
-    let mut cx = Context::new(writer);
-    expr.evaluate(&mut cx)
+pub fn evaluate<W: Write>(ast: ir::Ast<Expr>, writer: &mut W) -> Result<Value, RuntimeError> {
+    let ir::Ast { tree, meta } = ast;
+    let mut cx = Context::new(meta, writer);
+    tree.evaluate(&mut cx)
 }
 
 #[inline]
-pub fn interpret<W: Write>(prog: Program, writer: &mut W) -> Result<(), RuntimeError> {
-    let mut cx = Context::new(writer);
-    prog.interpret(&mut cx).map(|_| ())
+pub fn interpret<W: Write>(ast: ir::Ast<Program>, writer: &mut W) -> Result<(), RuntimeError> {
+    let ir::Ast { tree, meta } = ast;
+    let mut cx = Context::new(meta, writer);
+    tree.interpret(&mut cx).map(|_| ())
 }
 
 // TODO: GC with tracing to collect cyclic object graphs
@@ -254,7 +256,7 @@ struct Function {
 impl Display for Function {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<fn {}>", self.declaration.ident)
+        write!(f, "<fn {}>", self.declaration.name)
     }
 }
 
@@ -291,6 +293,17 @@ impl Call for Function {
         result
     }
 }
+
+// TODO: Challenge 4 (https://craftinginterpreters.com/resolving-and-binding.html#challenges)
+//
+// Our resolver calculates which environment the variable is found in, but it’s still looked up by
+// name in that map. A more efficient environment representation would store local variables in an
+// array and look them up by index.
+//
+// Extend the resolver to associate a unique index for each local variable declared in a scope.
+// When resolving a variable access, look up both the scope the variable is in and its index and
+// store that. In the interpreter, use that to quickly access a variable by its index instead of
+// using a map.
 
 #[derive(Debug, Default)]
 struct Environment {
@@ -350,16 +363,39 @@ impl Environment {
                 Entry::Vacant(entry) => {
                     var = entry.into_key();
 
-                    let Some(ref enclosing) = env.enclosing else {
-                        break Err(span.throw(format!("Undefined variable '{var}'.")));
-                    };
+                    let enclosing = env
+                        .enclosing
+                        .as_ref()
+                        .map(Rc::clone)
+                        .ok_or_else(|| span.throw(format!("Undefined variable '{var}'.")))?;
 
-                    // hacky `this = Rc::clone(enclosing);` to make the borrow-checker happy
-                    let parent = Rc::clone(enclosing);
                     drop(env);
-                    this = parent;
+                    this = enclosing;
                 }
             }
+        }
+    }
+
+    fn assign_at(
+        this: RcCell<Self>,
+        dist: usize,
+        var: &str,
+        val: Value,
+        span: &Span,
+    ) -> Result<Value, RuntimeError> {
+        let Some(env) = Self::ancestor(this, dist) else {
+            return Err(span.throw(format!("Undefined variable '{var}'.")));
+        };
+
+        let mut env = env.borrow_mut();
+
+        match env.bindings.entry(var.to_string()) {
+            Entry::Occupied(mut entry) => {
+                let _ = entry.insert(val);
+                // NOTE: objects are ref-counted, so this should be cheap
+                Ok(entry.get().clone())
+            }
+            Entry::Vacant(entry) => Ok(entry.insert(val).clone()),
         }
     }
 
@@ -371,33 +407,68 @@ impl Environment {
                 Some(val) => break Ok(val.clone()),
 
                 None => {
-                    let Some(ref enclosing) = env.enclosing else {
-                        break Err(span.throw(format!("Undefined variable '{var}'.")));
-                    };
+                    let enclosing = env
+                        .enclosing
+                        .as_ref()
+                        .map(Rc::clone)
+                        .ok_or_else(|| span.throw(format!("Undefined variable '{var}'.")))?;
 
-                    // hacky `this = Rc::clone(enclosing);` to make the borrow-checker happy
-                    let parent = Rc::clone(enclosing);
                     drop(env);
-                    this = parent;
+                    this = enclosing;
                 }
             }
         }
+    }
+
+    fn get_at(
+        this: RcCell<Self>,
+        dist: usize,
+        var: &str,
+        span: &Span,
+    ) -> Result<Value, RuntimeError> {
+        Self::ancestor(this, dist)
+            .and_then(|env| env.borrow().bindings.get(var).cloned())
+            .ok_or_else(|| span.throw(format!("Undefined variable '{var}'.")))
+    }
+
+    fn ancestor(mut this: RcCell<Self>, dist: usize) -> Option<RcCell<Self>> {
+        for _ in 0..dist {
+            let env = this.borrow();
+            let enclosing = this.borrow().enclosing.as_ref().map(Rc::clone)?;
+            drop(env);
+            this = enclosing;
+        }
+        Some(this)
     }
 }
 
 struct Context<'a> {
     environment: RcCell<Environment>,
     globals: RcCell<Environment>,
+    locals: HashMap<u64, usize>,
+    // TODO: use this in lookup and possibly Environment
+    #[allow(dead_code)]
+    idents: HashMap<u64, String>,
     writer: &'a mut dyn Write,
 }
 
 impl<'a> Context<'a> {
-    fn new<W: Write>(writer: &'a mut W) -> Self {
+    fn new<W: Write>(meta: ir::Metadata, writer: &'a mut W) -> Self {
         let globals = Rc::new(RefCell::new(Environment::global()));
         Self {
             environment: Rc::clone(&globals),
             globals,
+            locals: meta.locals,
+            idents: meta.idents,
             writer,
+        }
+    }
+
+    fn lookup(&self, id: u64, name: &str, span: &Span) -> Result<Value, RuntimeError> {
+        if let Some(&dist) = self.locals.get(&id) {
+            Environment::get_at(Rc::clone(&self.environment), dist, name, span)
+        } else {
+            Environment::get(Rc::clone(&self.globals), name, span)
         }
     }
 }
@@ -426,15 +497,14 @@ impl Evaluate for Expr {
 }
 
 impl Evaluate for Atom {
-    #[inline]
     fn evaluate(&self, cx: &mut Context) -> Result<Value, RuntimeError> {
-        Ok(match &self.literal {
-            Literal::Ident(x) => Environment::get(Rc::clone(&cx.environment), x, &self.span)?,
-            Literal::Str(s) => Value::obj(Rc::clone(s)),
-            Literal::Num(n) => Value::new(*n),
-            Literal::Bool(b) => Value::new(*b),
-            Literal::Nil => Value::Nil,
-        })
+        match &self.literal {
+            Literal::Ident(id, name) => cx.lookup(*id, name, &self.span),
+            Literal::Str(s) => Ok(Value::obj(Rc::clone(s))),
+            Literal::Num(n) => Ok(Value::new(*n)),
+            Literal::Bool(b) => Ok(Value::new(*b)),
+            Literal::Nil => Ok(Value::Nil),
+        }
     }
 }
 
@@ -456,7 +526,7 @@ impl Evaluate for Cons {
 
                 // TODO: generalize to regions/places/locations where values can be assigned to
                 let Expr::Atom(Atom {
-                    literal: Literal::Ident(var),
+                    literal: Literal::Ident(id, var),
                     ..
                 }) = lhs
                 else {
@@ -467,8 +537,14 @@ impl Evaluate for Cons {
 
                 // NOTE: assignment evaluates to the expression (rhs) value
                 //  - This is for cases such as `var a = b = 1;`
-                let env = Rc::clone(&cx.environment);
-                Environment::assign(env, var, val, &self.span)
+
+                if let Some(&dist) = cx.locals.get(id) {
+                    let env = Rc::clone(&cx.environment);
+                    Environment::assign_at(env, dist, var, val, &self.span)
+                } else {
+                    let env = Rc::clone(&cx.globals);
+                    Environment::assign(env, var, val, &self.span)
+                }
             }
 
             Operator::Bang => match self.args.as_slice() {
@@ -724,7 +800,7 @@ impl Interpret for Decl {
 
 impl Interpret for Fun {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
-        let ident = &self.func.ident;
+        let ident = &self.func.name;
 
         // capture the environment in which the function is declared
         let func = Function {
@@ -811,9 +887,7 @@ impl Interpret for Print {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         let value = self.expr.evaluate(cx)?;
 
-        // FIXME: Call instances can be printed, but panic if behind a Value::Object
-        // writeln!(cx.writer, "{value}").map_err(move |error| self.span.throw(error))
-
+        // NOTE: Call instances can be printed, but panic if behind a Value::Object / Any
         if let Some(callable) = value.downcast_callable() {
             writeln!(cx.writer, "{callable}")
         } else {
@@ -838,7 +912,7 @@ impl Interpret for Return {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::resolver::resolve;
     use std::io::BufWriter;
 
     #[test]
@@ -848,8 +922,12 @@ mod tests {
 
         let mut writer = BufWriter::new(Vec::new());
 
-        let program = input.parse().expect("valid program");
-        interpret(program, &mut writer).expect("no runtime error");
+        let ast = input
+            .parse()
+            .and_then(|ast| resolve(input, ast))
+            .expect("valid program");
+
+        interpret(ast, &mut writer).expect("no runtime error");
 
         let buf = writer.into_inner().expect("failed to flush");
         let actual = String::from_utf8(buf).expect("UTF-8 interpreter output");

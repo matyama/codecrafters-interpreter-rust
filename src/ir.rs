@@ -1,13 +1,28 @@
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Add;
 use std::rc::Rc;
 
 use crate::span::Span;
-use crate::token::{Keyword, LexToken, Token};
+use crate::token::{Keyword, Token};
 
-// TODO: more efficient identifier representation
+#[derive(Debug)]
+pub struct Ast<T> {
+    pub(crate) tree: T,
+    pub(crate) meta: Metadata,
+}
+
+impl<T> AsRef<T> for Ast<T> {
+    #[inline]
+    fn as_ref(&self) -> &T {
+        &self.tree
+    }
+}
+
+// TODO: more efficient identifier representation (at least Rc)
 #[derive(Debug)]
 pub struct Ident {
+    pub(crate) id: u64,
     pub(crate) name: String,
     pub(crate) span: Span,
 }
@@ -33,7 +48,7 @@ pub enum Literal {
     Bool(bool),
     Num(f64),
     Str(Rc<String>),
-    Ident(String),
+    Ident(u64, String),
 }
 
 impl Display for Literal {
@@ -44,22 +59,7 @@ impl Display for Literal {
             Self::Num(n) if n.fract() > 0.0 => write!(f, "{n}"),
             Self::Num(n) => write!(f, "{n:.1}"),
             Self::Str(s) => write!(f, "{s}"),
-            Self::Ident(x) => write!(f, "{x}"),
-        }
-    }
-}
-
-impl From<&Token<'_>> for Literal {
-    fn from(token: &Token<'_>) -> Self {
-        use crate::token::{Keyword::*, Literal::*};
-        match token {
-            Token::Keyword(True) => Self::Bool(true),
-            Token::Keyword(False) => Self::Bool(false),
-            Token::Keyword(Nil) => Self::Nil,
-            Token::Literal(Str(s)) => Self::Str(Rc::new(s.to_string())),
-            Token::Literal(Num(n)) => Self::Num(*n),
-            Token::Literal(Ident(x)) => Self::Ident(x.to_string()),
-            _ => Self::Nil,
+            Self::Ident(_, x) => write!(f, "{x}"),
         }
     }
 }
@@ -70,20 +70,11 @@ pub struct Atom {
     pub span: Span,
 }
 
-impl From<&LexToken<'_>> for Atom {
-    fn from(token: &LexToken) -> Self {
-        Self {
-            literal: Literal::from(&token.token),
-            span: token.span.clone(),
-        }
-    }
-}
-
 impl From<Ident> for Atom {
     #[inline]
-    fn from(Ident { name, span }: Ident) -> Self {
+    fn from(Ident { id, name, span }: Ident) -> Self {
         Self {
-            literal: Literal::Ident(name),
+            literal: Literal::Ident(id, name),
             span,
         }
     }
@@ -136,24 +127,31 @@ pub enum Operator {
 }
 
 impl Display for Operator {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_ref())
+    }
+}
+
+impl AsRef<str> for Operator {
+    fn as_ref(&self) -> &str {
         match self {
-            Self::Plus => f.write_str("+"),
-            Self::Minus => f.write_str("-"),
-            Self::Star => f.write_str("*"),
-            Self::Slash => f.write_str("/"),
-            Self::And => f.write_str("and"),
-            Self::Or => f.write_str("or"),
-            Self::Bang => f.write_str("!"),
-            Self::BangEqual => f.write_str("!="),
-            Self::Equal => f.write_str("="),
-            Self::EqualEqual => f.write_str("=="),
-            Self::Greater => f.write_str(">"),
-            Self::GreaterEqual => f.write_str(">="),
-            Self::Less => f.write_str("<"),
-            Self::LessEqual => f.write_str("<="),
-            Self::LeftParen => f.write_str("group"),
-            Self::Call => Ok(()),
+            Self::Plus => "+",
+            Self::Minus => "-",
+            Self::Star => "*",
+            Self::Slash => "/",
+            Self::And => "and",
+            Self::Or => "or",
+            Self::Bang => "!",
+            Self::BangEqual => "!=",
+            Self::Equal => "=",
+            Self::EqualEqual => "==",
+            Self::Greater => ">",
+            Self::GreaterEqual => ">=",
+            Self::Less => "<",
+            Self::LessEqual => "<=",
+            Self::LeftParen => "group",
+            Self::Call => "",
         }
     }
 }
@@ -288,7 +286,7 @@ impl TryFrom<Expr> for AssignTarget {
         // TODO: support other kinds of assignment targets than just a variable identifier
         match expr {
             var @ Expr::Atom(Atom {
-                literal: Literal::Ident(_),
+                literal: Literal::Ident(..),
                 ..
             }) => Ok(AssignTarget(var)),
             expr => Err(expr),
@@ -357,7 +355,9 @@ pub struct Fun {
 /// Function declaration of the form: `<IDENTIFIER> (<PARAMETERS>?) <BODY>`
 #[derive(Debug)]
 pub struct Function {
-    pub ident: String,
+    #[allow(dead_code)]
+    pub id: u64,
+    pub name: String,
     pub params: Vec<Ident>,
     pub body: Block,
     pub span: Span,
@@ -468,6 +468,22 @@ pub struct Print {
 pub struct Return {
     pub(crate) value: Option<Expr>,
     pub(crate) span: Span,
+}
+
+// NOTE: Alternatively, this could be part of the IR and computed during parsing. The benefit of
+// storing it as a separate data structure is that it's easy to lookup/update/discard information.
+/// Metadata associated to various parts of the AST.
+#[derive(Debug, Default)]
+pub struct Metadata {
+    // XXX: Vec<String> assuming sequential IDs
+    /// Identifier names indexed by their unique IDs
+    pub(crate) idents: HashMap<u64, String>,
+
+    /// Variable resolution: a mapping from variable names to their _definition distance_
+    ///
+    /// The mapping stores for each variable the number of scopes between the current to the one
+    /// where the variable was defined.
+    pub(crate) locals: HashMap<u64, usize>,
 }
 
 #[cfg(test)]

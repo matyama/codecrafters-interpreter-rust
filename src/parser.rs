@@ -1,9 +1,8 @@
-use std::borrow::Cow;
 use std::iter::Peekable;
 use std::rc::Rc;
 use std::str::FromStr;
 
-use crate::error::SyntaxError;
+use crate::error::{ErrLoc, SyntaxError};
 use crate::ir::{
     self, AssignTarget, Atom, Block, Cons, Decl, Expr, Fun, Function, Ident, If, Operator, Print,
     Program, Return, Stmt, Var, While,
@@ -14,7 +13,7 @@ use crate::token::{Keyword, LexToken, Literal, Token};
 
 const MAX_ARGS: usize = 255;
 
-impl FromStr for Expr {
+impl FromStr for ir::Ast<Expr> {
     type Err = SyntaxError;
 
     fn from_str(source: &str) -> Result<Self, Self::Err> {
@@ -22,7 +21,7 @@ impl FromStr for Expr {
     }
 }
 
-impl FromStr for Program {
+impl FromStr for ir::Ast<Program> {
     type Err = SyntaxError;
 
     fn from_str(source: &str) -> Result<Self, Self::Err> {
@@ -380,7 +379,9 @@ macro_rules! rule {
     // models: function → IDENTIFIER "(" parameters? ")" block ;
     ($head:ident -> $ident:ident "(" $params:ident? ")" $block:ident ;) => {
         fn $head(&mut self) -> Result<Function, SyntaxError> {
-            let Ident { name, mut span } = self.$ident(|| format!("{} name", stringify!($head)))?;
+            let Ident { id, name, mut span } = self.$ident(
+                || format!("{} name", stringify!($head))
+            )?;
 
             span += self.left_paren(|| format!("after {} name", stringify!($head)))?;
 
@@ -400,7 +401,8 @@ macro_rules! rule {
             };
 
             Ok(Function {
-                ident: name,
+                id,
+                name,
                 params,
                 body,
                 span,
@@ -601,24 +603,29 @@ macro_rules! rule {
 
             match next {
                 Ok(
-                    token @ LexToken {
+                    LexToken {
                         token: Token::Literal(
                            Literal::$ty0(..) $(| Literal::$ty(..))*
                         ),
                         ..
                     }
                 ) => {
-                    let atom = Atom::from(token);
                     let _ = self.advance()?;
+                    let Some(atom) = self.current_atom() else {
+                        // TODO: this is quite awkward and probably deserves re-visit
+                        unreachable!("matched and advanced to an existing token");
+                    };
                     Ok(Expr::Atom(atom))
                 }
 
-                Ok(token @ LexToken {
+                Ok(LexToken {
                     token: Token::Keyword(True | False | Nil),
                     ..
                 }) => {
-                    let atom = Atom::from(token);
                     let _ = self.advance()?;
+                    let Some(atom) = self.current_atom() else {
+                        unreachable!("matched and advanced to an existing token");
+                    };
                     Ok(Expr::Atom(atom))
                 }
 
@@ -797,6 +804,9 @@ pub struct Parser<'a> {
     source: &'a str,
     tokens: Peekable<TokenStream<'a>>,
     current: Option<LexToken<'a>>,
+    meta: ir::Metadata,
+    /// Sequential ID of the next encountered identifier node
+    next_ident: u64,
 }
 
 impl<'a> Parser<'a> {
@@ -806,20 +816,17 @@ impl<'a> Parser<'a> {
             source,
             tokens: Lexer::new(source).into_iter().peekable(),
             current: None,
+            meta: ir::Metadata::default(),
+            next_ident: 0,
         }
     }
 
+    #[inline]
     fn error<M>(&self, span: Span, msg: M, loc: ErrLoc) -> SyntaxError
     where
         M: Into<Box<dyn std::error::Error + 'static>>,
     {
-        let code = span.snippet(self.source).to_string();
-        SyntaxError {
-            span,
-            code,
-            context: loc.into(),
-            source: msg.into(),
-        }
+        SyntaxError::new(self.source, span, msg, loc)
     }
 
     fn peek(&mut self) -> Result<Result<&LexToken<'a>, Span>, &SyntaxError> {
@@ -845,6 +852,42 @@ impl<'a> Parser<'a> {
         })
     }
 
+    fn reigister_ident(&mut self, name: String, span: Span) -> Ident {
+        let id = self.next_ident;
+        self.next_ident += 1;
+
+        // TODO: Rc<String> instead of cloning
+        if let Some(name) = self.meta.idents.insert(id, name.clone()) {
+            panic!("attempted to register identifier '{name}' under an existing ID {id}");
+        }
+
+        Ident { id, name, span }
+    }
+
+    // parse the current token as an atom
+    fn current_atom(&mut self) -> Option<ir::Atom> {
+        use crate::token::{Keyword::*, Literal::*};
+
+        let t = self.current.as_ref()?;
+
+        let span = t.span.clone();
+
+        let literal = match &t.token {
+            Token::Keyword(True) => ir::Literal::Bool(true),
+            Token::Keyword(False) => ir::Literal::Bool(false),
+            Token::Keyword(Nil) => ir::Literal::Nil,
+            Token::Literal(Str(s)) => ir::Literal::Str(Rc::new(s.to_string())),
+            Token::Literal(Num(n)) => ir::Literal::Num(*n),
+            Token::Literal(Ident(x)) => {
+                let ident = self.reigister_ident(x.to_string(), span);
+                return Some(ir::Atom::from(ident));
+            }
+            _ => ir::Literal::Nil,
+        };
+
+        Some(ir::Atom { literal, span })
+    }
+
     fn identifier<C, D>(&mut self, ctx: C) -> Result<Ident, SyntaxError>
     where
         D: std::fmt::Display,
@@ -855,10 +898,11 @@ impl<'a> Parser<'a> {
                 token: Token::Literal(Literal::Ident(ident)),
                 span,
                 ..
-            }) => Ok(Ident {
-                name: ident.to_string(),
-                span: span.clone(),
-            }),
+            }) => {
+                let name = ident.to_string();
+                let span = span.clone();
+                Ok(self.reigister_ident(name, span))
+            }
 
             Ok(LexToken { lexeme, span, .. }) => {
                 let span = span.clone();
@@ -921,8 +965,11 @@ impl<'a> Parser<'a> {
     /// parameters     → IDENTIFIER ( "," IDENTIFIER )* ;
     /// ```
     #[inline]
-    pub fn parse_prog(mut self) -> Result<Program, SyntaxError> {
-        self.program()
+    pub fn parse_prog(mut self) -> Result<ir::Ast<Program>, SyntaxError> {
+        Ok(ir::Ast {
+            tree: self.program()?,
+            meta: self.meta,
+        })
     }
 
     /// Parse a sequence of tokens according to the following grammar:
@@ -946,8 +993,11 @@ impl<'a> Parser<'a> {
     /// arguments      → expression ( "," expression )* ;
     /// ```
     #[inline]
-    pub fn parse_expr(mut self) -> Result<Expr, SyntaxError> {
-        self.expression()
+    pub fn parse_expr(mut self) -> Result<ir::Ast<Expr>, SyntaxError> {
+        Ok(ir::Ast {
+            tree: self.expression()?,
+            meta: self.meta,
+        })
     }
 
     rule! {
@@ -1052,29 +1102,5 @@ impl<'a> Parser<'a> {
         right_paren: RightParen;
         left_brace: LeftBrace;
         right_brace: RightBrace;
-    }
-}
-
-#[derive(Debug, Default)]
-enum ErrLoc {
-    At(Cow<'static, str>),
-    #[default]
-    Eof,
-}
-
-impl ErrLoc {
-    #[inline]
-    fn at(loc: &str) -> Self {
-        Self::At(Cow::Owned(format!(" at '{loc}'")))
-    }
-}
-
-impl From<ErrLoc> for Cow<'static, str> {
-    #[inline]
-    fn from(loc: ErrLoc) -> Self {
-        match loc {
-            ErrLoc::At(loc) => loc,
-            ErrLoc::Eof => Cow::Borrowed(" at end"),
-        }
     }
 }

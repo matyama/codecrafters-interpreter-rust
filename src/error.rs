@@ -13,6 +13,21 @@ pub struct SyntaxError {
     pub source: Box<dyn std::error::Error + 'static>,
 }
 
+impl SyntaxError {
+    pub fn new<M>(source: &str, span: Span, msg: M, loc: ErrLoc) -> SyntaxError
+    where
+        M: Into<Box<dyn std::error::Error + 'static>>,
+    {
+        let code = span.snippet(source).to_string();
+        SyntaxError {
+            span,
+            code,
+            context: loc.into(),
+            source: msg.into(),
+        }
+    }
+}
+
 impl Debug for SyntaxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -92,5 +107,29 @@ mod tests {
 
         let expected = "Operands must be numbers.\n[line 1]";
         assert_eq!(expected.to_string(), error.to_string());
+    }
+}
+
+#[derive(Debug, Default)]
+pub enum ErrLoc {
+    At(Cow<'static, str>),
+    #[default]
+    Eof,
+}
+
+impl ErrLoc {
+    #[inline]
+    pub fn at(loc: impl AsRef<str>) -> Self {
+        Self::At(Cow::Owned(format!(" at '{}'", loc.as_ref())))
+    }
+}
+
+impl From<ErrLoc> for Cow<'static, str> {
+    #[inline]
+    fn from(loc: ErrLoc) -> Self {
+        match loc {
+            ErrLoc::At(loc) => loc,
+            ErrLoc::Eof => Cow::Borrowed(" at end"),
+        }
     }
 }
