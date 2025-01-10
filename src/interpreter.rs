@@ -8,9 +8,7 @@ use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use crate::error::{RuntimeError, ThrowRuntimeError as _};
-use crate::ir::{
-    self, Atom, Block, Cons, Decl, Expr, If, Literal, Operator, Print, Program, Return, Stmt, While,
-};
+use crate::ir::{self, Atom, Cons, Expr, Literal, Operator, Program};
 use crate::span::Span;
 
 type RcCell<T> = Rc<RefCell<T>>;
@@ -853,7 +851,7 @@ impl Interpret for Program {
     }
 }
 
-impl Interpret for Decl {
+impl Interpret for ir::Decl {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         match self {
             Self::Class(class) => class.interpret(cx),
@@ -909,7 +907,7 @@ impl Interpret for ir::Var {
     }
 }
 
-impl Interpret for Stmt {
+impl Interpret for ir::Stmt {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         match self {
             Self::Block(block) => block.interpret(cx),
@@ -922,7 +920,7 @@ impl Interpret for Stmt {
     }
 }
 
-impl Interpret for Block {
+impl Interpret for ir::Block {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         let environment = Environment::scope(Rc::clone(&cx.environment));
 
@@ -940,7 +938,7 @@ impl Interpret for Block {
     }
 }
 
-impl Interpret for If {
+impl Interpret for ir::If {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         if self.cond.evaluate(cx)?.into() {
             self.then_branch.interpret(cx)
@@ -952,7 +950,7 @@ impl Interpret for If {
     }
 }
 
-impl Interpret for While {
+impl Interpret for ir::While {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         while self.cond.evaluate(cx)?.into() {
             if let ret @ ControlFlow::Break(_) = self.body.interpret(cx)? {
@@ -963,7 +961,7 @@ impl Interpret for While {
     }
 }
 
-impl Interpret for Print {
+impl Interpret for ir::Print {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         let value = self.expr.evaluate(cx)?;
 
@@ -978,7 +976,7 @@ impl Interpret for Print {
     }
 }
 
-impl Interpret for Return {
+impl Interpret for ir::Return {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         self.value
             .as_ref()
