@@ -57,6 +57,13 @@ enum FunctionType {
     Function,
 }
 
+// Optimization for single deferred identifier, so we don't have to allocate
+#[derive(Debug)]
+enum Deferred {
+    Ident(u64, usize),
+    Idents(Vec<(u64, usize)>),
+}
+
 #[derive(Debug)]
 pub(crate) struct Context<'a> {
     source: &'a str,
@@ -66,6 +73,17 @@ pub(crate) struct Context<'a> {
     /// Variables declared at the top level in the global scope are not tracked. I.e., if a
     /// variable cannot be found here, it can be assumed to be global.
     scopes: Vec<Scope>,
+
+    // TODO: limit to function identifiers only
+    /// Set of identifier names with deferred resolution
+    ///
+    /// The mapping is from identifier name to a pair of AST node id and resolution scope depth.
+    /// This mapping is used to resolve calls to functions with an unresolved (not yet at least)
+    /// declaration which, however, appears in later parts of the AST (possibly at a lower depth).
+    ///
+    /// An example of this can be two mutually recursive functions, where by necessity the
+    /// declaration of one follows the declaration of the other.
+    deferred: HashMap<String, Deferred>,
 
     /// Field indicating whether the code being currently resolved is inside a function declaration
     current_fn: FunctionType,
@@ -80,6 +98,7 @@ impl<'a> Context<'a> {
         Self {
             source,
             scopes: Vec::new(),
+            deferred: HashMap::new(),
             current_fn: FunctionType::default(),
             meta,
         }
@@ -133,7 +152,7 @@ impl<'a> Context<'a> {
 
     #[inline]
     fn is_undefined(&self, var: &str) -> bool {
-        self.scopes.first().is_some_and(|s| s.is_undefined(var))
+        self.scopes.last().is_some_and(|s| s.is_undefined(var))
     }
 
     fn resolve_local(&mut self, id: u64, name: &str) {
@@ -148,6 +167,76 @@ impl<'a> Context<'a> {
 
         if let Some(dist) = dist {
             self.meta.locals.insert(id, dist);
+        } else {
+            // TODO: limit inserts to function calls only
+            // Depending on the AST traversal, function calls might precede corresponding function
+            // declaration (at a lower depth), so defer resolution by registering current depth.
+            self.defer_local(id, name, self.scopes.len());
+        }
+    }
+
+    fn defer_local(&mut self, id: u64, name: &str, depth: usize) {
+        match self.deferred.entry(name.to_string()) {
+            Entry::Vacant(e) => {
+                e.insert(Deferred::Ident(id, depth));
+            }
+            Entry::Occupied(mut e) => match e.get_mut() {
+                Deferred::Ident(i, d) => {
+                    let ids = vec![(*i, *d), (id, depth)];
+                    e.insert(Deferred::Idents(ids));
+                }
+                Deferred::Idents(ids) => {
+                    ids.push((id, depth));
+                }
+            },
+        }
+    }
+
+    fn resolve_deferred(&mut self, name: &str) {
+        let Some(deferred) = self.deferred.get_mut(name) else {
+            return;
+        };
+
+        // respect lexical scoping, i.e., resolve only if the call happens "below" this fn def
+        let def_depth = self.scopes.len();
+
+        match deferred {
+            Deferred::Ident(_, call_depth) if def_depth <= *call_depth => {
+                // function can be declared only once in any scope, so remove the deferred entry
+                let Some(Deferred::Ident(id, call_depth)) = self.deferred.remove(name) else {
+                    unreachable!("got the entry before");
+                };
+
+                if let Entry::Vacant(e) = self.meta.locals.entry(id) {
+                    // locals store the distance to the declaration
+                    e.insert(call_depth - def_depth);
+                }
+            }
+
+            Deferred::Ident(..) => {}
+
+            Deferred::Idents(ids) => {
+                let mut i = 0;
+                while let Some((_, call_depth)) = ids.get(i) {
+                    if def_depth <= *call_depth {
+                        let (id, call_depth) = ids.swap_remove(i);
+                        if let Entry::Vacant(e) = self.meta.locals.entry(id) {
+                            // locals store the distance to the declaration
+                            e.insert(call_depth - def_depth);
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+
+                match ids.as_slice() {
+                    [] => {
+                        self.deferred.remove(name);
+                    }
+                    [(call_depth, id)] => *deferred = Deferred::Ident(*call_depth, *id),
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -279,7 +368,12 @@ impl Resolve for ir::Function {
         cx.define(&self.name);
 
         // resolve function's body
-        cx.resolve_fn(&self.params, &self.body, FunctionType::Function)
+        cx.resolve_fn(&self.params, &self.body, FunctionType::Function)?;
+
+        // resolve any deferred calls referring to this function declaration
+        cx.resolve_deferred(&self.name);
+
+        Ok(())
     }
 }
 

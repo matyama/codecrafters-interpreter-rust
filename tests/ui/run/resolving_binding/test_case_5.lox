@@ -1,0 +1,12 @@
+{
+  fun run(n) {
+    process(2 * n);
+    process(2 * n + 1);
+  }
+
+  fun process(n) {
+    print n;
+  }
+
+  run(3);
+}
