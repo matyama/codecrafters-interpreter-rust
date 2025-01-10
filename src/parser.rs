@@ -58,8 +58,8 @@ macro_rules! rule {
     };
 
     // models simple rule alternatives:
-    //  - declaration → var_decl  | statement ;
-    //  - statement   → expr_stmt | print_stmt | block ;
+    //  - declaration → class_decl | fun_decl   | var_decl | statement ;
+    //  - statement   → expr_stmt  | print_stmt | block ;
     //  - expression  → assignment ;
     ($($head:ident -> $rule0:ident $(| $rule:ident)* ; # $t:ty)+) => {
         $(
@@ -118,6 +118,60 @@ macro_rules! rule {
             }
 
             Ok(expr)
+        }
+    };
+
+    // models class_decl → "class" IDENTIFIER "{" function* "}" ;
+    ($head:ident -> "class" $ident:ident "{" $method:ident* "}" ;) => {
+        fn $head(&mut self) -> Result<Option<ir::Class>, SyntaxError> {
+            let Some(mut span) = self.class_keyword()? else {
+                return Ok(None);
+            };
+
+            // mandatory class identifier
+            let Ident { id, name, span: s } = self.$ident(
+                || format!("{} name", stringify!($head))
+            )?;
+            span += s;
+
+            // TODO: deduplicate (template) the rest with the rule for blocs
+            // attempt to match start of a block indicated by '{'
+            let Some(mut span) = self.left_brace_token()? else {
+                return Ok(None);
+            };
+
+            let mut methods = Vec::new();
+
+            loop {
+                let method = match self.peek() {
+                    // stop when '}' is reached
+                    Ok(Ok(LexToken {
+                        token: Token::RightBrace,
+                        ..
+                    })) => break,
+
+                    // stop when EOF is reached
+                    Ok(Err(_)) => break,
+
+                    // propagate errors
+                    Err(_) => {
+                        let Err(error) = self.advance() else {
+                            unreachable!("peeked an error");
+                        };
+                        return Err(error);
+                    }
+
+                    // otherwise parse a method (function)
+                    _ => self.$method()?,
+                };
+
+                methods.push(method);
+            }
+
+            // consume closing '}' or fail if EOF was reached
+            span += self.right_brace(|| "")?;
+
+            Ok(Some(ir::Class { id, name, methods, span }))
         }
     };
 
@@ -924,9 +978,11 @@ impl<'a> Parser<'a> {
     /// Parse a sequence of tokens according to the following grammar:
     /// ```text
     /// program        → declaration* EOF ;
-    /// declaration    → fun_decl
+    /// declaration    → class_decl
+    ///                | fun_decl
     ///                | var_decl
     ///                | statement ;
+    /// class_decl     → "class" IDENTIFIER "{" function* "}" ;
     /// fun_decl       → "fun" function ;
     /// var_decl       → "var" IDENTIFIER ( "=" expression )? ";" ;
     /// statement      → expr_stmt
@@ -1005,7 +1061,7 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        declaration -> statement | var_decl | fun_decl ;                                  #  Decl
+        declaration -> statement | var_decl | fun_decl | class_decl ;                     #  Decl
         statement   -> expr_stmt | if_stmt | while_stmt | for_stmt | print_stmt | return_stmt
                        | block ; #  Stmt
         expression  -> assignment ;                                                       #  Expr
@@ -1013,6 +1069,10 @@ impl<'a> Parser<'a> {
 
     rule! {
         assignment  -> IDENTIFIER "=" assignment | logic_or ;
+    }
+
+    rule! {
+        class_decl  -> "class" identifier "{" function* "}" ;
     }
 
     rule! {
@@ -1092,6 +1152,7 @@ impl<'a> Parser<'a> {
         else_keyword?         Keyword(Else) ;
         while_keyword?        Keyword(While) ;
         for_keyword?          Keyword(For) ;
+        class_keyword?        Keyword(Class) ;
         fun_keyword?          Keyword(Fun) ;
         return_keyword?       Keyword(Return) ;
     }

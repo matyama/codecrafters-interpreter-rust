@@ -9,8 +9,7 @@ use std::rc::Rc;
 
 use crate::error::{RuntimeError, ThrowRuntimeError as _};
 use crate::ir::{
-    self, Atom, Block, Cons, Decl, Expr, Fun, If, Literal, Operator, Print, Program, Return, Stmt,
-    Var, While,
+    self, Atom, Block, Cons, Decl, Expr, If, Literal, Operator, Print, Program, Return, Stmt, While,
 };
 use crate::span::Span;
 
@@ -121,15 +120,44 @@ impl Value {
         Self::Object(Object(obj))
     }
 
-    fn downcast_callable(&self) -> Option<&dyn Call> {
+    fn downcast_display(&self) -> Option<&dyn Display> {
         match self {
             Self::Object(Object(obj)) => {
                 if let Some(f) = obj.downcast_ref::<Native>() {
-                    return Some(f as &dyn Call);
+                    return Some(f);
                 }
 
                 if let Some(f) = obj.downcast_ref::<Function>() {
-                    return Some(f as &dyn Call);
+                    return Some(f);
+                }
+
+                if let Some(class) = obj.downcast_ref::<Class>() {
+                    return Some(class);
+                }
+
+                if let Some(instance) = obj.downcast_ref::<Instance>() {
+                    return Some(instance);
+                }
+
+                None
+            }
+            Self::Nil => None,
+        }
+    }
+
+    fn downcast_callable(&self) -> Option<Rc<dyn Call>> {
+        match self {
+            Self::Object(Object(obj)) => {
+                if let Ok(f) = Rc::clone(obj).downcast::<Native>() {
+                    return Some(f);
+                }
+
+                if let Ok(f) = Rc::clone(obj).downcast::<Function>() {
+                    return Some(f);
+                }
+
+                if let Ok(class) = Rc::clone(obj).downcast::<Class>() {
+                    return Some(class);
                 }
 
                 None
@@ -202,7 +230,7 @@ impl From<Value> for bool {
 trait Call: std::fmt::Debug + Display {
     fn arity(&self) -> usize;
 
-    fn call(&self, args: Vec<Value>, cx: &mut Context) -> Result<Value, RuntimeError>;
+    fn call(self: Rc<Self>, args: Vec<Value>, cx: &mut Context) -> Result<Value, RuntimeError>;
 }
 
 fn clock(args: Vec<Value>, _cx: &mut Context) -> Result<Value, RuntimeError> {
@@ -239,7 +267,7 @@ impl Call for Native {
     }
 
     #[inline]
-    fn call(&self, args: Vec<Value>, cx: &mut Context) -> Result<Value, RuntimeError> {
+    fn call(self: Rc<Self>, args: Vec<Value>, cx: &mut Context) -> Result<Value, RuntimeError> {
         debug_assert_eq!(args.len(), self.arity);
         (self.func)(args, cx)
     }
@@ -266,7 +294,7 @@ impl Call for Function {
         self.declaration.params.len()
     }
 
-    fn call(&self, args: Vec<Value>, cx: &mut Context) -> Result<Value, RuntimeError> {
+    fn call(self: Rc<Self>, args: Vec<Value>, cx: &mut Context) -> Result<Value, RuntimeError> {
         // create fresh environment (initialized from this function's closure)
         let environment = Environment::scope(Rc::clone(&self.closure));
 
@@ -291,6 +319,43 @@ impl Call for Function {
         cx.environment = prev;
 
         result
+    }
+}
+
+#[derive(Debug)]
+struct Class {
+    name: String,
+}
+
+impl Display for Class {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl Call for Class {
+    #[inline]
+    fn arity(&self) -> usize {
+        0
+    }
+
+    fn call(self: Rc<Self>, _args: Vec<Value>, _cx: &mut Context) -> Result<Value, RuntimeError> {
+        Ok(Value::new(Instance {
+            class: Rc::clone(&self),
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct Instance {
+    class: Rc<Class>,
+}
+
+impl Display for Instance {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} instance", self.class.name)
     }
 }
 
@@ -791,6 +856,7 @@ impl Interpret for Program {
 impl Interpret for Decl {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         match self {
+            Self::Class(class) => class.interpret(cx),
             Self::Fun(fun) => fun.interpret(cx),
             Self::Var(var) => var.interpret(cx),
             Self::Stmt(stmt) => stmt.interpret(cx),
@@ -798,7 +864,21 @@ impl Interpret for Decl {
     }
 }
 
-impl Interpret for Fun {
+impl Interpret for ir::Class {
+    fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
+        cx.environment.borrow_mut().define(&self.name, None);
+
+        let class = Value::new(Class {
+            // XXX: Rc::clone(&self.name)
+            name: self.name.to_string(),
+        });
+
+        Environment::assign(Rc::clone(&cx.environment), &self.name, class, &self.span)
+            .map(|_| ControlFlow::Continue(()))
+    }
+}
+
+impl Interpret for ir::Fun {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         let ident = &self.func.name;
 
@@ -816,7 +896,7 @@ impl Interpret for Fun {
     }
 }
 
-impl Interpret for Var {
+impl Interpret for ir::Var {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         let value = self
             .expr
@@ -888,8 +968,8 @@ impl Interpret for Print {
         let value = self.expr.evaluate(cx)?;
 
         // NOTE: Call instances can be printed, but panic if behind a Value::Object / Any
-        if let Some(callable) = value.downcast_callable() {
-            writeln!(cx.writer, "{callable}")
+        if let Some(value) = value.downcast_display() {
+            writeln!(cx.writer, "{value}")
         } else {
             writeln!(cx.writer, "{value}")
         }

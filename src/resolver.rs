@@ -19,18 +19,18 @@ pub fn resolve<T: Resolve>(source: &str, ast: ir::Ast<T>) -> Result<ir::Ast<T>, 
     })
 }
 
-/// Block scope containing a mapping from variable names to their initialization state
+/// Block scope containing a mapping from identifier names to their initialization state
 #[derive(Debug, Default)]
 #[repr(transparent)]
 struct Scope(HashMap<String, bool>);
 
 impl Scope {
-    /// Returns true if given variable is in this scope and has not been initialized
+    /// Returns true if given name is in this scope and has not been initialized
     ///
-    /// I.e., the key `var` is present and the associated value is `false`.
+    /// I.e., the key `name` is present and the associated value is `false`.
     #[inline]
-    fn is_undefined(&self, var: &str) -> bool {
-        !self.get(var).unwrap_or(&true)
+    fn is_undefined(&self, name: &str) -> bool {
+        !self.get(name).unwrap_or(&true)
     }
 }
 
@@ -115,13 +115,13 @@ impl<'a> Context<'a> {
         result
     }
 
-    /// Adds variable `var` to the innermost scope (shadowing any outer one with the same name).
+    /// Adds `name` to the innermost scope (shadowing any outer one with the same name).
     ///
     /// From this point, the variable will exist in the scope, but is marked as _unavailable_
     /// (i.e., not having its initializer expression resolved yet).
-    fn declare(&mut self, var: &str, span: &Span) -> Result<(), SyntaxError> {
+    fn declare(&mut self, name: &str, span: &Span) -> Result<(), SyntaxError> {
         if let Some(scope) = self.scopes.last_mut() {
-            match scope.entry(var.to_string()) {
+            match scope.entry(name.to_string()) {
                 // lox does not allow re-declaring the same var in local scopes (local shadowing)
                 Entry::Occupied(entry) => {
                     return Err(SyntaxError::new(
@@ -140,19 +140,19 @@ impl<'a> Context<'a> {
         Ok(())
     }
 
-    /// Mark variable `var` in the innermost scope as being initialized.
-    fn define(&mut self, var: &str) {
+    /// Mark `name` in the innermost scope as being initialized.
+    fn define(&mut self, name: &str) {
         if let Some(scope) = self.scopes.last_mut() {
-            let Some(initialized) = scope.get_mut(var) else {
-                panic!("defining an '{var}' that has not been declared");
+            let Some(initialized) = scope.get_mut(name) else {
+                panic!("defining a '{name}' that has not been declared");
             };
             *initialized = true;
         }
     }
 
     #[inline]
-    fn is_undefined(&self, var: &str) -> bool {
-        self.scopes.last().is_some_and(|s| s.is_undefined(var))
+    fn is_undefined(&self, name: &str) -> bool {
+        self.scopes.last().is_some_and(|s| s.is_undefined(name))
     }
 
     fn resolve_local(&mut self, id: u64, name: &str) {
@@ -347,10 +347,19 @@ impl Resolve for ir::Program {
 impl Resolve for ir::Decl {
     fn resolve(&self, cx: &mut Context) -> Result<(), SyntaxError> {
         match self {
+            Self::Class(class) => class.resolve(cx),
             Self::Fun(fun) => fun.resolve(cx),
             Self::Var(var) => var.resolve(cx),
             Self::Stmt(stmt) => stmt.resolve(cx),
         }
+    }
+}
+
+impl Resolve for ir::Class {
+    fn resolve(&self, cx: &mut Context) -> Result<(), SyntaxError> {
+        cx.declare(&self.name, &self.span)?;
+        cx.define(&self.name);
+        Ok(())
     }
 }
 

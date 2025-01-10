@@ -308,6 +308,7 @@ pub struct Program(pub(crate) Vec<Decl>);
 /// Declarations
 #[derive(Debug)]
 pub enum Decl {
+    Class(Class),
     Fun(Fun),
     Var(Var),
     Stmt(Stmt),
@@ -317,10 +318,18 @@ impl Decl {
     #[inline]
     pub fn span(&self) -> &Span {
         match self {
+            Self::Class(Class { span, .. }) => span,
             Self::Fun(Fun { span, .. }) => span,
             Self::Var(Var { span, .. }) => span,
             Self::Stmt(stmt) => stmt.span(),
         }
+    }
+}
+
+impl From<Class> for Decl {
+    #[inline]
+    fn from(class: Class) -> Self {
+        Self::Class(class)
     }
 }
 
@@ -343,6 +352,17 @@ impl From<Stmt> for Decl {
     fn from(stmt: Stmt) -> Self {
         Self::Stmt(stmt)
     }
+}
+
+/// Class declaration of the form: `class <IDENTIFIER> { <FUNCTION>* )`
+#[derive(Debug)]
+pub struct Class {
+    #[allow(dead_code)]
+    pub id: u64,
+    pub name: String,
+    #[allow(dead_code)]
+    pub methods: Vec<Function>,
+    pub span: Span,
 }
 
 /// Function declaration of the form: `fun <IDENTIFIER> (<PARAMETERS>?) <BODY>`
