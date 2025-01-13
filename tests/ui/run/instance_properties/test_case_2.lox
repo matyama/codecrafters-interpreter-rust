@@ -1,0 +1,15 @@
+class Foo {}
+
+class Bar {}
+
+var foo = Foo();
+foo.x = "a";
+
+var bar = Bar();
+bar.x = "b";
+
+foo.bar = bar;
+
+print foo.x;
+print bar.x;
+print foo.bar.x;

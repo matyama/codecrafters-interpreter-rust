@@ -164,6 +164,13 @@ impl Value {
         }
     }
 
+    fn downcast_instance(&self) -> Option<Rc<Instance>> {
+        match self {
+            Self::Object(Object(obj)) => Rc::clone(obj).downcast::<Instance>().ok(),
+            Self::Nil => None,
+        }
+    }
+
     pub fn map<T: 'static>(self, f: impl FnOnce(&T) -> T) -> Result<Self, Self> {
         match self {
             Self::Object(obj) => obj.map::<T>(f).map(Self::Object).map_err(Self::Object),
@@ -341,6 +348,7 @@ impl Call for Class {
     fn call(self: Rc<Self>, _args: Vec<Value>, _cx: &mut Context) -> Result<Value, RuntimeError> {
         Ok(Value::new(Instance {
             class: Rc::clone(&self),
+            fields: RefCell::new(HashMap::new()),
         }))
     }
 }
@@ -348,6 +356,24 @@ impl Call for Class {
 #[derive(Debug)]
 struct Instance {
     class: Rc<Class>,
+    fields: RefCell<HashMap<String, Value>>,
+}
+
+impl Instance {
+    fn get(&self, name: &str, span: &Span) -> Result<Value, RuntimeError> {
+        self.fields
+            .borrow()
+            .get(name)
+            .cloned()
+            .ok_or_else(|| RuntimeError {
+                span: span.clone(),
+                source: format!("Undefined property '{name}'.").into(),
+            })
+    }
+
+    fn set(&self, name: &str, value: Value) {
+        let _ = self.fields.borrow_mut().insert(name.to_string(), value);
+    }
 }
 
 impl Display for Instance {
@@ -587,26 +613,50 @@ impl Evaluate for Cons {
                     return Err(self.span.throw("Operands must be l-value and r-value."));
                 };
 
-                // TODO: generalize to regions/places/locations where values can be assigned to
-                let Expr::Atom(Atom {
-                    literal: Literal::Ident(id, var),
-                    ..
-                }) = lhs
-                else {
-                    return Err(self.span.throw("Operands must be l-value and r-value."));
-                };
+                match lhs {
+                    // variable assignment (e.g., x = 42)
+                    Expr::Atom(Atom {
+                        literal: Literal::Ident(id, var),
+                        ..
+                    }) => {
+                        let val = rhs.evaluate(cx)?;
 
-                let val = rhs.evaluate(cx)?;
+                        // NOTE: assignment evaluates to the expression (rhs) value
+                        //  - This is for cases such as `var a = b = 1;`
 
-                // NOTE: assignment evaluates to the expression (rhs) value
-                //  - This is for cases such as `var a = b = 1;`
+                        if let Some(&dist) = cx.locals.get(id) {
+                            let env = Rc::clone(&cx.environment);
+                            Environment::assign_at(env, dist, var, val, &self.span)
+                        } else {
+                            let env = Rc::clone(&cx.globals);
+                            Environment::assign(env, var, val, &self.span)
+                        }
+                    }
 
-                if let Some(&dist) = cx.locals.get(id) {
-                    let env = Rc::clone(&cx.environment);
-                    Environment::assign_at(env, dist, var, val, &self.span)
-                } else {
-                    let env = Rc::clone(&cx.globals);
-                    Environment::assign(env, var, val, &self.span)
+                    // set expression (e.g., obj.prop = 42)
+                    Expr::Cons(Cons {
+                        op: Operator::Dot,
+                        args,
+                        ..
+                    }) => match args.as_slice() {
+                        [obj, Expr::Atom(Atom {
+                            literal: Literal::Ident(_, prop),
+                            span,
+                        })] => {
+                            let Some(obj) = obj.evaluate(cx)?.downcast_instance() else {
+                                return Err(span.throw("Only instances have fields."));
+                            };
+
+                            let val = rhs.evaluate(cx)?;
+
+                            obj.set(prop, val.clone());
+
+                            Ok(val)
+                        }
+                        _ => Err(self.span.throw("Operands must be l-value and r-value.")),
+                    },
+
+                    _ => Err(self.span.throw("Operands must be l-value and r-value.")),
                 }
             }
 
@@ -831,6 +881,27 @@ impl Evaluate for Cons {
 
                 // NOTE: due to function calls, evaluate may have side-effects
                 callee.call(args, cx)
+            }
+
+            Operator::Dot => {
+                let Some((obj, prop)) = binary_args(&self.args) else {
+                    return Err(self.span.throw("Operands must be two expressions."));
+                };
+
+                let obj = obj.evaluate(cx)?;
+
+                let Some(instance) = obj.downcast_instance() else {
+                    return Err(self.span.throw("Only instances have properties."));
+                };
+
+                match prop {
+                    Expr::Atom(Atom {
+                        literal: Literal::Ident(_, name),
+                        span,
+                    }) => instance.get(name, span),
+
+                    expr => Err(expr.span().throw("Invalid property type.")),
+                }
             }
         }
     }

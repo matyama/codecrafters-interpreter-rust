@@ -74,8 +74,8 @@ macro_rules! rule {
         )+
     };
 
-    // models assignment → IDENTIFIER "=" assignment | equality ;
-    ($head:ident -> IDENTIFIER "=" $rval:ident | $lval:ident ;) => {
+    // models assignment → ( call "." )? IDENTIFIER "=" assignment | equality ;
+    ($head:ident -> ( $call:ident "." )? IDENTIFIER "=" $rval:ident | $lval:ident ;) => {
         fn $head(&mut self) -> Result<Expr, SyntaxError> {
             let expr = self.$lval()?;
 
@@ -611,34 +611,44 @@ macro_rules! rule {
         )+
     };
 
-    // models: call → primary ( "(" arguments? ")" )* ;
-    ($head:ident -> $rule0:ident ( "(" $rule:ident? ")" )* ; ) => {
+    // models: call → primary ( "(" arguments? ")" | "." IDENTIFIER )* ;
+    ($head:ident -> $rule0:ident ( "(" $rule:ident? ")" | "." $property:ident )* ; ) => {
         fn $head(&mut self) -> Result<Expr, SyntaxError> {
             let mut expr = self.$rule0()?;
 
             loop {
-                let Some(s) = self.left_paren_token()? else {
-                    break Ok(expr);
-                };
-
                 // finish call
-                expr = {
-                    let mut span = expr.span() + &s;
-                    let mut args = vec![expr];
+                if let Some(s) = self.left_paren_token()? {
+                    expr = {
+                        let mut span = expr.span() + &s;
+                        let mut args = vec![expr];
 
-                    if let Some(s) = self.right_paren_token()? {
-                        span += s;
-                    } else {
-                        span = self.$rule(&mut args, span)?;
-                        span += self.right_paren(|| format!("after {}", stringify!($head)))?;
-                    }
+                        if let Some(s) = self.right_paren_token()? {
+                            span += s;
+                        } else {
+                            span = self.$rule(&mut args, span)?;
+                            span += self.right_paren(|| format!("after {}", stringify!($head)))?;
+                        }
 
-                    Expr::Cons(Cons {
-                        op: Operator::Call,
-                        args,
-                        span,
-                    })
-                };
+                        Expr::Cons(Cons {
+                            op: Operator::Call,
+                            args,
+                            span,
+                        })
+                    };
+
+                    continue;
+                }
+
+                // property access
+                if self.dot_token()?.is_some() {
+                    let ident = self.$property(|| "property name")?;
+                    let span = expr.span() + &ident.span;
+                    expr = Expr::binary(Operator::Dot, expr, Expr::from(ident), span);
+                    continue;
+                }
+
+                break Ok(expr);
             }
         }
     };
@@ -1002,7 +1012,7 @@ impl<'a> Parser<'a> {
     /// block          → "{" declaration* "}" ;
     /// function       → IDENTIFIER "(" parameters? ")" block ;
     /// expression     → assignment ;
-    /// assignment     → IDENTIFIER "=" assignment
+    /// assignment     → ( call "." )? IDENTIFIER "=" assignment
     ///                | logic_or ;
     /// logic_or       → logic_and ( "or" logic_and )* ;
     /// logic_and      → equality ( "and" equality )* ;
@@ -1068,7 +1078,7 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        assignment  -> IDENTIFIER "=" assignment | logic_or ;
+        assignment  -> ( call "." )? IDENTIFIER "=" assignment | logic_or ;
     }
 
     rule! {
@@ -1130,7 +1140,7 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        call        -> primary ( "(" arguments? ")" )* ;
+        call        -> primary ( "(" arguments? ")" | "." identifier )* ;
     }
 
     rule! {
@@ -1144,6 +1154,7 @@ impl<'a> Parser<'a> {
 
     rule! {
         comma_token?          Comma ;
+        dot_token?            Dot ;
         semicolon_token?      Semicolon ;
         left_paren_token?     LeftParen ;
         right_paren_token?    RightParen ;

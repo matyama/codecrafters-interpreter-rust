@@ -70,6 +70,19 @@ pub struct Atom {
     pub span: Span,
 }
 
+impl Atom {
+    #[inline]
+    fn is_ident(&self) -> bool {
+        matches!(
+            self,
+            Self {
+                literal: Literal::Ident(..),
+                ..
+            }
+        )
+    }
+}
+
 impl From<Ident> for Atom {
     #[inline]
     fn from(Ident { id, name, span }: Ident) -> Self {
@@ -124,6 +137,9 @@ pub enum Operator {
 
     // invoking function-like objects
     Call,
+
+    // property access
+    Dot,
 }
 
 impl Display for Operator {
@@ -152,6 +168,7 @@ impl AsRef<str> for Operator {
             Self::LessEqual => "<=",
             Self::LeftParen => "group",
             Self::Call => "",
+            Self::Dot => ".",
         }
     }
 }
@@ -174,6 +191,7 @@ impl From<&Token<'_>> for Option<Operator> {
             Token::Less => Some(Operator::Less),
             Token::LessEqual => Some(Operator::LessEqual),
             Token::LeftParen => Some(Operator::LeftParen),
+            Token::Dot => Some(Operator::Dot),
             // NOTE: Operator::Call must be constructed explicitly
             _ => None,
         }
@@ -208,6 +226,11 @@ pub enum Expr {
 }
 
 impl Expr {
+    #[inline]
+    pub(crate) fn is_ident(&self) -> bool {
+        matches!(self, Self::Atom(atom) if atom.is_ident())
+    }
+
     #[inline]
     pub fn span(&self) -> &Span {
         match self {
@@ -274,7 +297,7 @@ impl From<Ident> for Expr {
     }
 }
 
-/// [Expr]ession wrapper indicating a valid *r-value* (i.e, assignment target)
+/// [Expr]ession wrapper indicating a valid *l-value* (i.e, assignment target)
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct AssignTarget(Expr);
@@ -283,13 +306,21 @@ impl TryFrom<Expr> for AssignTarget {
     type Error = Expr;
 
     fn try_from(expr: Expr) -> Result<Self, Self::Error> {
-        // TODO: support other kinds of assignment targets than just a variable identifier
-        match expr {
-            var @ Expr::Atom(Atom {
+        match &expr {
+            // target is a variable (e.g, x = 42)
+            Expr::Atom(Atom {
                 literal: Literal::Ident(..),
                 ..
-            }) => Ok(AssignTarget(var)),
-            expr => Err(expr),
+            }) => Ok(Self(expr)),
+
+            // target is a get expression (e.g., obj.field.subfield = 42)
+            Expr::Cons(Cons {
+                op: Operator::Dot,
+                args,
+                ..
+            }) if matches!(args.as_slice(), [_, y] if y.is_ident()) => Ok(Self(expr)),
+
+            _ => Err(expr),
         }
     }
 }

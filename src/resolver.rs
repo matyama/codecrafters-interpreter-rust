@@ -307,11 +307,12 @@ impl Resolve for ir::Atom {
 impl Resolve for ir::Cons {
     #[inline]
     fn resolve(&self, cx: &mut Context) -> Result<(), SyntaxError> {
-        self.args.iter().try_for_each(|arg| arg.resolve(cx))?;
+        use ir::Operator::*;
 
-        // handle assignment operator
-        if matches!(self.op, ir::Operator::Equal) {
-            match self.args.as_slice() {
+        // TODO (Equal (Dot obj name) value) => resolve(value) resolve(obj)
+        match self.op {
+            Equal => match self.args.as_slice() {
+                // variable assignment operator
                 [ir::Expr::Atom(ir::Atom {
                     literal: ir::Literal::Ident(id, name),
                     ..
@@ -321,19 +322,42 @@ impl Resolve for ir::Cons {
 
                     // resolve the variable that’s being assigned to
                     cx.resolve_local(*id, name);
-                }
-                _ => {
-                    return Err(SyntaxError::new(
-                        cx.source,
-                        self.span.clone(),
-                        "Operands must be l-value and r-value.",
-                        ErrLoc::at(self.op),
-                    ));
-                }
-            }
-        }
 
-        Ok(())
+                    Ok(())
+                }
+
+                // set expression: property itself is dynamically evaluated
+                [ir::Expr::Cons(ir::Cons { op: Dot, args, .. }), value] => {
+                    let [obj, _prop] = args.as_slice() else {
+                        return Err(SyntaxError::new(
+                            cx.source,
+                            self.span.clone(),
+                            "Operand must be a set expression",
+                            ErrLoc::at(self.op),
+                        ));
+                    };
+
+                    // first resolve the assigned value in case it references other variables
+                    value.resolve(cx)?;
+
+                    // then resolve the object in `obj.prop`
+                    obj.resolve(cx)
+                }
+
+                _ => Err(SyntaxError::new(
+                    cx.source,
+                    self.span.clone(),
+                    "Operands must be l-value and r-value.",
+                    ErrLoc::at(self.op),
+                )),
+            },
+
+            // properties are looked up dynamically (resolving object in `obj.prop`)
+            Dot => self.args.iter().take(1).try_for_each(|arg| arg.resolve(cx)),
+
+            // resolve all arguments for all the other operators
+            _ => self.args.iter().try_for_each(|arg| arg.resolve(cx)),
+        }
     }
 }
 
