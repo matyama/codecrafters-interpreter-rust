@@ -10,6 +10,7 @@ use std::rc::Rc;
 use crate::error::{RuntimeError, ThrowRuntimeError as _};
 use crate::ir::{self, Atom, Cons, Expr, Literal, Operator, Program};
 use crate::span::Span;
+use crate::token::Keyword;
 
 type RcCell<T> = Rc<RefCell<T>>;
 
@@ -286,6 +287,24 @@ struct Function {
     closure: RcCell<Environment>,
 }
 
+impl Function {
+    /// Bind new implicit variable called `this` to given `instance`.
+    ///
+    /// This method wraps the closure in `self` by a new environment which contains the implicit
+    /// definition: `var this = instance;`.
+    fn bind(self: Rc<Self>, instance: Rc<Instance>) -> Self {
+        let closure = Environment::scope(Rc::clone(&self.closure));
+        closure
+            .borrow_mut()
+            .define(Keyword::This.into(), Some(Value::obj(instance)));
+
+        Self {
+            declaration: Rc::clone(&self.declaration),
+            closure,
+        }
+    }
+}
+
 impl Display for Function {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -335,8 +354,8 @@ struct Class {
 
 impl Class {
     #[inline]
-    fn find_method(&self, name: &str) -> Option<Value> {
-        self.methods.get(name).cloned().map(Value::obj)
+    fn find_method(&self, name: &str) -> Option<Rc<Function>> {
+        self.methods.get(name).cloned()
     }
 }
 
@@ -368,12 +387,18 @@ struct Instance {
 }
 
 impl Instance {
-    fn get(&self, name: &str, span: &Span) -> Result<Value, RuntimeError> {
+    fn get(self: Rc<Self>, name: &str, span: &Span) -> Result<Value, RuntimeError> {
         self.fields
             .borrow()
             .get(name)
             .cloned()
-            .or_else(|| self.class.find_method(name))
+            .or_else(|| {
+                let this = Rc::clone(&self);
+                self.class
+                    .find_method(name)
+                    .map(|method| method.bind(this))
+                    .map(Value::new)
+            })
             .ok_or_else(|| RuntimeError {
                 span: span.clone(),
                 source: format!("Undefined property '{name}'.").into(),

@@ -310,7 +310,6 @@ impl Resolve for ir::Cons {
     fn resolve(&self, cx: &mut Context) -> Result<(), SyntaxError> {
         use ir::Operator::*;
 
-        // TODO (Equal (Dot obj name) value) => resolve(value) resolve(obj)
         match self.op {
             Equal => match self.args.as_slice() {
                 // variable assignment operator
@@ -386,15 +385,24 @@ impl Resolve for ir::Class {
         cx.declare(&self.name, &self.span)?;
         cx.define(&self.name);
 
-        for method in self.methods.iter() {
-            // resolve method's body
-            cx.resolve_fn(&method.params, &method.body, FunctionType::Method)?;
+        cx.with_scope(|cx| {
+            let Some(scope) = cx.scopes.last_mut() else {
+                unreachable!("inside a scope");
+            };
 
-            // resolve any deferred calls referring to this method declaration
-            cx.resolve_deferred(&method.name);
-        }
+            // inject `this` as an implicit variable into this scope
+            let _ = scope.insert(Keyword::This.to_string(), true);
 
-        Ok(())
+            for method in self.methods.iter() {
+                // resolve method's body
+                cx.resolve_fn(&method.params, &method.body, FunctionType::Method)?;
+
+                // resolve any deferred calls referring to this method declaration
+                cx.resolve_deferred(&method.name);
+            }
+
+            Ok(())
+        })
     }
 }
 

@@ -653,8 +653,12 @@ macro_rules! rule {
         }
     };
 
-    // models: primary → NUMBER | STRING | "true" | "false" | "nil" | "(" expression ")" | IDENTIFIER ;
-    ($head:ident -> $ty0:ident $(| $ty:ident)* | "true" | "false" | "nil" | ( $group:ident ) ;) => {
+    // models: primary → NUMBER | STRING | "this" | "true" | "false" | "nil" | "(" expression ")"
+    //                   | IDENTIFIER ;
+    (
+        $head:ident ->
+        $ty0:ident $(| $ty:ident)* | "this" | "true" | "false" | "nil" | ( $group:ident ) ;
+    ) => {
         fn $head(&mut self) -> Result<Expr, SyntaxError> {
             use crate::token::Keyword::*;
 
@@ -683,7 +687,7 @@ macro_rules! rule {
                 }
 
                 Ok(LexToken {
-                    token: Token::Keyword(True | False | Nil),
+                    token: Token::Keyword(This | True | False | Nil),
                     ..
                 }) => {
                     let _ = self.advance()?;
@@ -946,6 +950,10 @@ impl<'a> Parser<'a> {
                 let ident = self.reigister_ident(x.to_string(), span);
                 return Some(ir::Atom::from(ident));
             }
+            Token::Keyword(This) => {
+                let ident = self.reigister_ident(This.to_string(), span);
+                return Some(ir::Atom::from(ident));
+            }
             _ => ir::Literal::Nil,
         };
 
@@ -1052,7 +1060,7 @@ impl<'a> Parser<'a> {
     /// unary          → ( "!" | "-" ) unary
     ///                | call ;
     /// call           → primary ( "(" arguments? ")" )* ;
-    /// primary        → NUMBER | STRING | "true" | "false" | "nil"
+    /// primary        → NUMBER | STRING | "this" | "true" | "false" | "nil"
     ///                | "(" expression ")"
     ///                | IDENTIFIER ;
     ///
@@ -1144,7 +1152,7 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        primary     -> Num | Str | Ident | "true" | "false" | "nil" | ( expression ) ;
+        primary     -> Num | Str | Ident | "this" | "true" | "false" | "nil" | ( expression ) ;
     }
 
     rule! {
