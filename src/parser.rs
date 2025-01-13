@@ -165,7 +165,7 @@ macro_rules! rule {
                     _ => self.$method()?,
                 };
 
-                methods.push(method);
+                methods.push(Rc::new(method));
             }
 
             // consume closing '}' or fail if EOF was reached

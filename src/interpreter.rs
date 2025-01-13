@@ -330,6 +330,14 @@ impl Call for Function {
 #[derive(Debug)]
 struct Class {
     name: String,
+    methods: HashMap<String, Rc<Function>>,
+}
+
+impl Class {
+    #[inline]
+    fn find_method(&self, name: &str) -> Option<Value> {
+        self.methods.get(name).cloned().map(Value::obj)
+    }
 }
 
 impl Display for Class {
@@ -365,6 +373,7 @@ impl Instance {
             .borrow()
             .get(name)
             .cloned()
+            .or_else(|| self.class.find_method(name))
             .ok_or_else(|| RuntimeError {
                 span: span.clone(),
                 source: format!("Undefined property '{name}'.").into(),
@@ -937,9 +946,20 @@ impl Interpret for ir::Class {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
         cx.environment.borrow_mut().define(&self.name, None);
 
+        let methods = HashMap::from_iter(self.methods.iter().cloned().map(|method| {
+            (
+                method.name.clone(),
+                Rc::new(Function {
+                    declaration: method,
+                    closure: Rc::clone(&cx.environment),
+                }),
+            )
+        }));
+
         let class = Value::new(Class {
             // XXX: Rc::clone(&self.name)
             name: self.name.to_string(),
+            methods,
         });
 
         Environment::assign(Rc::clone(&cx.environment), &self.name, class, &self.span)

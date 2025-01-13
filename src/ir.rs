@@ -391,8 +391,7 @@ pub struct Class {
     #[allow(dead_code)]
     pub id: u64,
     pub name: String,
-    #[allow(dead_code)]
-    pub methods: Vec<Function>,
+    pub methods: Vec<Rc<Function>>,
     pub span: Span,
 }
 

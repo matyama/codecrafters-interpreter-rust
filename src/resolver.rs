@@ -55,6 +55,7 @@ enum FunctionType {
     #[default]
     None,
     Function,
+    Method,
 }
 
 // Optimization for single deferred identifier, so we don't have to allocate
@@ -381,8 +382,18 @@ impl Resolve for ir::Decl {
 
 impl Resolve for ir::Class {
     fn resolve(&self, cx: &mut Context) -> Result<(), SyntaxError> {
+        // define class name in the surrounding scope
         cx.declare(&self.name, &self.span)?;
         cx.define(&self.name);
+
+        for method in self.methods.iter() {
+            // resolve method's body
+            cx.resolve_fn(&method.params, &method.body, FunctionType::Method)?;
+
+            // resolve any deferred calls referring to this method declaration
+            cx.resolve_deferred(&method.name);
+        }
+
         Ok(())
     }
 }
