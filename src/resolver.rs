@@ -55,6 +55,7 @@ enum FunctionType {
     #[default]
     None,
     Function,
+    Initializer,
     Method,
 }
 
@@ -418,8 +419,14 @@ impl Resolve for ir::Class {
             let _ = scope.insert(Keyword::This.to_string(), true);
 
             for method in self.methods.iter() {
+                // determine declaration type
+                let ty = match method.name.as_str() {
+                    "init" => FunctionType::Initializer,
+                    _ => FunctionType::Method,
+                };
+
                 // resolve method's body
-                cx.resolve_fn(&method.params, &method.body, FunctionType::Method)?;
+                cx.resolve_fn(&method.params, &method.body, ty)?;
 
                 // resolve any deferred calls referring to this method declaration
                 cx.resolve_deferred(&method.name);
@@ -526,13 +533,26 @@ impl Resolve for ir::Print {
 
 impl Resolve for ir::Return {
     fn resolve(&self, cx: &mut Context) -> Result<(), SyntaxError> {
-        if matches!(cx.current_fn, FunctionType::None) {
-            return Err(SyntaxError::new(
-                cx.source,
-                self.span.clone(),
-                "Can't return from top-level code.",
-                ErrLoc::at(Keyword::Return),
-            ));
+        match cx.current_fn {
+            FunctionType::None => {
+                return Err(SyntaxError::new(
+                    cx.source,
+                    self.span.clone(),
+                    "Can't return from top-level code.",
+                    ErrLoc::at(Keyword::Return),
+                ));
+            }
+
+            FunctionType::Initializer if self.value.is_some() => {
+                return Err(SyntaxError::new(
+                    cx.source,
+                    self.span.clone(),
+                    "Can't return a value from an initializer.",
+                    ErrLoc::at(Keyword::Return),
+                ));
+            }
+
+            _ => {}
         }
 
         if let Some(ref value) = self.value {

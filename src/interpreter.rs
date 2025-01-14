@@ -14,6 +14,8 @@ use crate::token::Keyword;
 
 type RcCell<T> = Rc<RefCell<T>>;
 
+const THIS: &str = Keyword::This.name();
+
 #[inline]
 pub fn evaluate<W: Write>(ast: ir::Ast<Expr>, writer: &mut W) -> Result<Value, RuntimeError> {
     let ir::Ast { tree, meta } = ast;
@@ -285,6 +287,8 @@ struct Function {
     declaration: Rc<ir::Function>,
     /// environment holding the surrounding variables where the function is declared
     closure: RcCell<Environment>,
+    /// flag indicating whether this function/method is a constructor `init()`
+    initializer: bool,
 }
 
 impl Function {
@@ -296,11 +300,12 @@ impl Function {
         let closure = Environment::scope(Rc::clone(&self.closure));
         closure
             .borrow_mut()
-            .define(Keyword::This.into(), Some(Value::obj(instance)));
+            .define(THIS, Some(Value::obj(instance)));
 
         Self {
             declaration: Rc::clone(&self.declaration),
             closure,
+            initializer: self.initializer,
         }
     }
 }
@@ -333,10 +338,13 @@ impl Call for Function {
         }
 
         // execute function's body under the appropriate context
-        let result = self.declaration.body.interpret(cx).map(|v| match v {
-            // NOTE: `.break_value().unwrap_or_default()`, but break_value is not available in 1.77
-            ControlFlow::Break(v) => v,
-            ControlFlow::Continue(()) => Value::Nil,
+        let result = self.declaration.body.interpret(cx).and_then(|v| match v {
+            // NOTE: Lox defined the implicit return value from an initializer to be the instance
+            ControlFlow::Break(_) | ControlFlow::Continue(_) if self.initializer => {
+                Environment::get_at(Rc::clone(&self.closure), 0, THIS, &self.declaration.span)
+            }
+            ControlFlow::Break(v) => Ok(v),
+            ControlFlow::Continue(()) => Ok(Value::Nil),
         });
 
         // restore previous environment before returning
@@ -346,6 +354,9 @@ impl Call for Function {
     }
 }
 
+// TODO: Challenge 1 & 2 (https://craftinginterpreters.com/classes.html#challenges)
+//  - Add support for _static_ methods that can be called directly on the class object itself.
+//  - Extend Lox to support getter methods.
 #[derive(Debug)]
 struct Class {
     name: String,
@@ -353,6 +364,8 @@ struct Class {
 }
 
 impl Class {
+    const INIT: &str = "init";
+
     #[inline]
     fn find_method(&self, name: &str) -> Option<Rc<Function>> {
         self.methods.get(name).cloned()
@@ -369,14 +382,23 @@ impl Display for Class {
 impl Call for Class {
     #[inline]
     fn arity(&self) -> usize {
-        0
+        self.find_method(Self::INIT).map_or(0, |init| init.arity())
     }
 
-    fn call(self: Rc<Self>, _args: Vec<Value>, _cx: &mut Context) -> Result<Value, RuntimeError> {
-        Ok(Value::new(Instance {
+    fn call(self: Rc<Self>, args: Vec<Value>, cx: &mut Context) -> Result<Value, RuntimeError> {
+        let instance = Rc::new(Instance {
             class: Rc::clone(&self),
             fields: RefCell::new(HashMap::new()),
-        }))
+        });
+
+        // bind and call the constructor (if defined)
+        if let Some(init) = self.find_method(Self::INIT) {
+            let instance = Rc::clone(&instance);
+            let init = Rc::new(init.bind(instance));
+            let _ = init.call(args, cx)?;
+        }
+
+        Ok(Value::obj(instance))
     }
 }
 
@@ -972,11 +994,13 @@ impl Interpret for ir::Class {
         cx.environment.borrow_mut().define(&self.name, None);
 
         let methods = HashMap::from_iter(self.methods.iter().cloned().map(|method| {
+            let initializer = method.name == Class::INIT;
             (
                 method.name.clone(),
                 Rc::new(Function {
                     declaration: method,
                     closure: Rc::clone(&cx.environment),
+                    initializer,
                 }),
             )
         }));
@@ -1000,6 +1024,7 @@ impl Interpret for ir::Fun {
         let func = Function {
             declaration: Rc::clone(&self.func),
             closure: Rc::clone(&cx.environment),
+            initializer: false,
         };
 
         cx.environment
