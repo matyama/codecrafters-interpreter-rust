@@ -23,6 +23,29 @@ pub enum Keyword {
     While,
 }
 
+impl Keyword {
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::And => "and",
+            Self::Class => "class",
+            Self::Else => "else",
+            Self::False => "false",
+            Self::Fun => "fun",
+            Self::For => "for",
+            Self::If => "if",
+            Self::Nil => "nil",
+            Self::Or => "or",
+            Self::Print => "print",
+            Self::Return => "return",
+            Self::Super => "super",
+            Self::This => "this",
+            Self::True => "true",
+            Self::Var => "var",
+            Self::While => "while",
+        }
+    }
+}
+
 impl<'a> TryFrom<&'a str> for Keyword {
     type Error = &'a str;
 
@@ -68,25 +91,9 @@ impl AsRef<str> for Keyword {
 }
 
 impl From<Keyword> for &'static str {
+    #[inline]
     fn from(keyword: Keyword) -> Self {
-        match keyword {
-            Keyword::And => "and",
-            Keyword::Class => "class",
-            Keyword::Else => "else",
-            Keyword::False => "false",
-            Keyword::Fun => "fun",
-            Keyword::For => "for",
-            Keyword::If => "if",
-            Keyword::Nil => "nil",
-            Keyword::Or => "or",
-            Keyword::Print => "print",
-            Keyword::Return => "return",
-            Keyword::Super => "super",
-            Keyword::This => "this",
-            Keyword::True => "true",
-            Keyword::Var => "var",
-            Keyword::While => "while",
-        }
+        keyword.name()
     }
 }
 

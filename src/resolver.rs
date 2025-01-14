@@ -58,6 +58,13 @@ enum FunctionType {
     Method,
 }
 
+#[derive(Debug, Default)]
+enum ClassType {
+    #[default]
+    None,
+    Class,
+}
+
 // Optimization for single deferred identifier, so we don't have to allocate
 #[derive(Debug)]
 enum Deferred {
@@ -89,6 +96,9 @@ pub(crate) struct Context<'a> {
     /// Field indicating whether the code being currently resolved is inside a function declaration
     current_fn: FunctionType,
 
+    /// Field indicating whether the code being currently resolved is inside a class declaration
+    current_class: ClassType,
+
     /// Metadata associated with AST nodes
     meta: ir::Metadata,
 }
@@ -101,6 +111,7 @@ impl<'a> Context<'a> {
             scopes: Vec::new(),
             deferred: HashMap::new(),
             current_fn: FunctionType::default(),
+            current_class: ClassType::default(),
             meta,
         }
     }
@@ -299,6 +310,17 @@ impl Resolve for ir::Atom {
             ));
         }
 
+        const THIS: &str = Keyword::This.name();
+
+        if name == THIS && matches!(cx.current_class, ClassType::None) {
+            return Err(SyntaxError::new(
+                cx.source,
+                self.span.clone(),
+                "Can't use 'this' outside of a class.",
+                ErrLoc::at(name),
+            ));
+        }
+
         cx.resolve_local(id, name);
 
         Ok(())
@@ -381,11 +403,13 @@ impl Resolve for ir::Decl {
 
 impl Resolve for ir::Class {
     fn resolve(&self, cx: &mut Context) -> Result<(), SyntaxError> {
+        let enclosing_class = mem::replace(&mut cx.current_class, ClassType::Class);
+
         // define class name in the surrounding scope
         cx.declare(&self.name, &self.span)?;
         cx.define(&self.name);
 
-        cx.with_scope(|cx| {
+        let result = cx.with_scope(|cx| {
             let Some(scope) = cx.scopes.last_mut() else {
                 unreachable!("inside a scope");
             };
@@ -402,7 +426,11 @@ impl Resolve for ir::Class {
             }
 
             Ok(())
-        })
+        });
+
+        cx.current_class = enclosing_class;
+
+        result
     }
 }
 
