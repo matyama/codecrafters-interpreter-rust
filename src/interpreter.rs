@@ -167,6 +167,13 @@ impl Value {
         }
     }
 
+    fn downcast_class(&self) -> Option<Rc<Class>> {
+        match self {
+            Self::Object(Object(obj)) => Rc::clone(obj).downcast::<Class>().ok(),
+            Self::Nil => None,
+        }
+    }
+
     fn downcast_instance(&self) -> Option<Rc<Instance>> {
         match self {
             Self::Object(Object(obj)) => Rc::clone(obj).downcast::<Instance>().ok(),
@@ -360,15 +367,20 @@ impl Call for Function {
 #[derive(Debug)]
 struct Class {
     name: String,
+    superclass: Option<Rc<Class>>,
     methods: HashMap<String, Rc<Function>>,
 }
 
 impl Class {
     const INIT: &'static str = "init";
 
-    #[inline]
     fn find_method(&self, name: &str) -> Option<Rc<Function>> {
-        self.methods.get(name).cloned()
+        self.methods.get(name).cloned().or_else(|| {
+            // if not found here, try to look for it up in the inheritance hierarchy
+            self.superclass
+                .as_ref()
+                .and_then(|superclass| superclass.find_method(name))
+        })
     }
 }
 
@@ -991,6 +1003,15 @@ impl Interpret for ir::Decl {
 
 impl Interpret for ir::Class {
     fn interpret(&self, cx: &mut Context) -> Result<ControlFlow<Value>, RuntimeError> {
+        let superclass = if let Some(ref superclass) = self.superclass {
+            match superclass.evaluate(cx)?.downcast_class() {
+                None => return Err(self.span.throw("Superclass must be a class.")),
+                superclass => superclass,
+            }
+        } else {
+            None
+        };
+
         cx.environment.borrow_mut().define(&self.name, None);
 
         let methods = HashMap::from_iter(self.methods.iter().cloned().map(|method| {
@@ -1008,6 +1029,7 @@ impl Interpret for ir::Class {
         let class = Value::new(Class {
             // XXX: Rc::clone(&self.name)
             name: self.name.to_string(),
+            superclass,
             methods,
         });
 

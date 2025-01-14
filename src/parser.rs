@@ -121,8 +121,8 @@ macro_rules! rule {
         }
     };
 
-    // models class_decl → "class" IDENTIFIER "{" function* "}" ;
-    ($head:ident -> "class" $ident:ident "{" $method:ident* "}" ;) => {
+    // models class_decl → "class" IDENTIFIER ( "<" IDENTIFIER )? "{" function* "}" ;
+    ($head:ident -> "class" $ident:ident ( "<" $super:ident )? "{" $method:ident* "}" ;) => {
         fn $head(&mut self) -> Result<Option<ir::Class>, SyntaxError> {
             let Some(mut span) = self.class_keyword()? else {
                 return Ok(None);
@@ -133,6 +133,15 @@ macro_rules! rule {
                 || format!("{} name", stringify!($head))
             )?;
             span += s;
+
+            // optional inheritance operator '<', followed by superclass identifier
+            let superclass = if self.less_token()?.is_some() {
+                let superclass = self.$super(|| format!("super{} name", stringify!($head)))?;
+                span += &superclass.span;
+                Some(ir::Atom::from(superclass))
+            } else {
+                None
+            };
 
             // TODO: deduplicate (template) the rest with the rule for blocs
             // attempt to match start of a block indicated by '{'
@@ -171,7 +180,7 @@ macro_rules! rule {
             // consume closing '}' or fail if EOF was reached
             span += self.right_brace(|| "")?;
 
-            Ok(Some(ir::Class { id, name, methods, span }))
+            Ok(Some(ir::Class { id, name, superclass, methods, span }))
         }
     };
 
@@ -1000,7 +1009,7 @@ impl<'a> Parser<'a> {
     ///                | fun_decl
     ///                | var_decl
     ///                | statement ;
-    /// class_decl     → "class" IDENTIFIER "{" function* "}" ;
+    /// class_decl     → "class" IDENTIFIER ( "<" IDENTIFIER )? "{" function* "}" ;
     /// fun_decl       → "fun" function ;
     /// var_decl       → "var" IDENTIFIER ( "=" expression )? ";" ;
     /// statement      → expr_stmt
@@ -1090,7 +1099,7 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        class_decl  -> "class" identifier "{" function* "}" ;
+        class_decl  -> "class" identifier ( "<" identifier )? "{" function* "}" ;
     }
 
     rule! {
@@ -1167,6 +1176,7 @@ impl<'a> Parser<'a> {
         left_paren_token?     LeftParen ;
         right_paren_token?    RightParen ;
         left_brace_token?     LeftBrace ;
+        less_token?           Less ;
         if_keyword?           Keyword(If) ;
         else_keyword?         Keyword(Else) ;
         while_keyword?        Keyword(While) ;

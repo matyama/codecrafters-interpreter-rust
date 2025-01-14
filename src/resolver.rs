@@ -410,6 +410,27 @@ impl Resolve for ir::Class {
         cx.declare(&self.name, &self.span)?;
         cx.define(&self.name);
 
+        match &self.superclass {
+            // detect and prevent inheritance loops: `class A < A {}`
+            Some(ir::Atom {
+                literal: ir::Literal::Ident(_, super_name),
+                ..
+            }) if super_name == &self.name => {
+                return Err(SyntaxError::new(
+                    cx.source,
+                    self.span.clone(),
+                    "A class can't inherit from itself.",
+                    ErrLoc::at(super_name),
+                ));
+            }
+
+            // resolve superclass
+            Some(superclass) => superclass.resolve(cx)?,
+
+            // no inheritance relation
+            None => {}
+        }
+
         let result = cx.with_scope(|cx| {
             let Some(scope) = cx.scopes.last_mut() else {
                 unreachable!("inside a scope");

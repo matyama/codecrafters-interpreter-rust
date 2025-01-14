@@ -385,12 +385,13 @@ impl From<Stmt> for Decl {
     }
 }
 
-/// Class declaration of the form: `class <IDENTIFIER> { <FUNCTION>* )`
+/// Class declaration of the form: `class <IDENTIFIER> (< <IDENTIFIER>)?  { <FUNCTION>* )`
 #[derive(Debug)]
 pub struct Class {
     #[allow(dead_code)]
     pub id: u64,
     pub name: String,
+    pub superclass: Option<Atom>,
     pub methods: Vec<Rc<Function>>,
     pub span: Span,
 }
