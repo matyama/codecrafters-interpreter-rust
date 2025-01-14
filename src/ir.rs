@@ -290,6 +290,13 @@ impl Add<Span> for Expr {
     }
 }
 
+impl From<Atom> for Expr {
+    #[inline]
+    fn from(atom: Atom) -> Self {
+        Self::Atom(atom)
+    }
+}
+
 impl From<Ident> for Expr {
     #[inline]
     fn from(ident: Ident) -> Self {
@@ -391,7 +398,7 @@ pub struct Class {
     #[allow(dead_code)]
     pub id: u64,
     pub name: String,
-    pub superclass: Option<Atom>,
+    pub superclass: Option<Rc<Expr>>,
     pub methods: Vec<Rc<Function>>,
     pub span: Span,
 }

@@ -3,6 +3,9 @@ use std::fmt::{Display, Write as _};
 
 use crate::span::Span;
 
+pub const THIS: &str = Keyword::This.name();
+pub const SUPER: &str = Keyword::Super.name();
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Keyword {
     And,

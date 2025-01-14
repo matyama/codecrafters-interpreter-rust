@@ -5,7 +5,7 @@ use std::ops::{Deref, DerefMut};
 use crate::error::{ErrLoc, SyntaxError};
 use crate::ir;
 use crate::span::Span;
-use crate::token::Keyword;
+use crate::token::{Keyword, SUPER, THIS};
 
 pub fn resolve<T: Resolve>(source: &str, ast: ir::Ast<T>) -> Result<ir::Ast<T>, SyntaxError> {
     let ir::Ast { tree, meta } = ast;
@@ -64,6 +64,7 @@ enum ClassType {
     #[default]
     None,
     Class,
+    SubClass,
 }
 
 // Optimization for single deferred identifier, so we don't have to allocate
@@ -117,6 +118,26 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// Run given function inside [`Scope`]ed context if the condition `guard()` is true.
+    ///
+    /// Note that the function is _always_ executed within this context, the guard condition only
+    /// determines whether a new [`Scope`] is created before (and destroyed after) calling `f`.
+    fn with_scope_if<F, G, R>(&mut self, guard: G, mut f: F) -> R
+    where
+        F: FnMut(&mut Self) -> R,
+        G: Fn() -> bool,
+    {
+        let scoped = guard();
+        if scoped {
+            self.scopes.push(Scope::default());
+        }
+        let result = f(self);
+        if scoped {
+            self.scopes.pop();
+        }
+        result
+    }
+
     /// Run given function inside [`Scope`]ed context
     fn with_scope<F, R>(&mut self, mut f: F) -> R
     where
@@ -160,6 +181,15 @@ impl<'a> Context<'a> {
                 panic!("defining a '{name}' that has not been declared");
             };
             *initialized = true;
+        }
+    }
+
+    /// Marks `name` in the innermost [`Scope`] as initialized.
+    ///
+    /// This method does nothing if there is no scope.
+    fn inject(&mut self, name: impl ToString) {
+        if let Some(scope) = self.scopes.last_mut() {
+            let _ = scope.insert(name.to_string(), true);
         }
     }
 
@@ -266,6 +296,7 @@ impl<'a> Context<'a> {
                 cx.declare(name, span)?;
                 cx.define(name);
             }
+
             // statically analyze function's body (note: at runtime this is deferred until called)
             body.resolve(cx)
         });
@@ -311,15 +342,24 @@ impl Resolve for ir::Atom {
             ));
         }
 
-        const THIS: &str = Keyword::This.name();
-
-        if name == THIS && matches!(cx.current_class, ClassType::None) {
-            return Err(SyntaxError::new(
-                cx.source,
-                self.span.clone(),
-                "Can't use 'this' outside of a class.",
-                ErrLoc::at(name),
-            ));
+        match cx.current_class {
+            ClassType::None if matches!(name.as_str(), SUPER | THIS) => {
+                return Err(SyntaxError::new(
+                    cx.source,
+                    self.span.clone(),
+                    format!("Can't use '{name}' outside of a class."),
+                    ErrLoc::at(name),
+                ));
+            }
+            ClassType::Class if name == SUPER => {
+                return Err(SyntaxError::new(
+                    cx.source,
+                    self.span.clone(),
+                    "Can't use 'super' in a class with no superclass.",
+                    ErrLoc::at(name),
+                ))
+            }
+            _ => {}
         }
 
         cx.resolve_local(id, name);
@@ -410,12 +450,12 @@ impl Resolve for ir::Class {
         cx.declare(&self.name, &self.span)?;
         cx.define(&self.name);
 
-        match &self.superclass {
+        match self.superclass.as_deref() {
             // detect and prevent inheritance loops: `class A < A {}`
-            Some(ir::Atom {
+            Some(ir::Expr::Atom(ir::Atom {
                 literal: ir::Literal::Ident(_, super_name),
                 ..
-            }) if super_name == &self.name => {
+            })) if super_name == &self.name => {
                 return Err(SyntaxError::new(
                     cx.source,
                     self.span.clone(),
@@ -425,36 +465,43 @@ impl Resolve for ir::Class {
             }
 
             // resolve superclass
-            Some(superclass) => superclass.resolve(cx)?,
+            Some(superclass) => {
+                cx.current_class = ClassType::SubClass;
+                superclass.resolve(cx)?
+            }
 
             // no inheritance relation
             None => {}
         }
 
-        let result = cx.with_scope(|cx| {
-            let Some(scope) = cx.scopes.last_mut() else {
-                unreachable!("inside a scope");
-            };
+        let result = cx.with_scope_if(
+            || self.superclass.is_some(),
+            |cx| {
+                // inject `super` as an implicit variable into this scope
+                cx.inject(Keyword::Super);
 
-            // inject `this` as an implicit variable into this scope
-            let _ = scope.insert(Keyword::This.to_string(), true);
+                cx.with_scope(|cx| {
+                    // inject `this` as an implicit variable into this scope
+                    cx.inject(Keyword::This);
 
-            for method in self.methods.iter() {
-                // determine declaration type
-                let ty = match method.name.as_str() {
-                    "init" => FunctionType::Initializer,
-                    _ => FunctionType::Method,
-                };
+                    for method in self.methods.iter() {
+                        // determine declaration type
+                        let ty = match method.name.as_str() {
+                            "init" => FunctionType::Initializer,
+                            _ => FunctionType::Method,
+                        };
 
-                // resolve method's body
-                cx.resolve_fn(&method.params, &method.body, ty)?;
+                        // resolve method's body
+                        cx.resolve_fn(&method.params, &method.body, ty)?;
 
-                // resolve any deferred calls referring to this method declaration
-                cx.resolve_deferred(&method.name);
-            }
+                        // resolve any deferred calls referring to this method declaration
+                        cx.resolve_deferred(&method.name);
+                    }
 
-            Ok(())
-        });
+                    Ok(())
+                })
+            },
+        );
 
         cx.current_class = enclosing_class;
 

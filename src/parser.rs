@@ -138,7 +138,7 @@ macro_rules! rule {
             let superclass = if self.less_token()?.is_some() {
                 let superclass = self.$super(|| format!("super{} name", stringify!($head)))?;
                 span += &superclass.span;
-                Some(ir::Atom::from(superclass))
+                Some(Rc::new(ir::Expr::from(superclass)))
             } else {
                 None
             };
@@ -662,11 +662,12 @@ macro_rules! rule {
         }
     };
 
-    // models: primary → NUMBER | STRING | "this" | "true" | "false" | "nil" | "(" expression ")"
-    //                   | IDENTIFIER ;
+    // models: primary → NUMBER | STRING | "true" | "false" | "nil" | "this" | "(" expression ")"
+    //                   | "super" "." IDENTIFIER | IDENTIFIER ;
     (
         $head:ident ->
-        $ty0:ident $(| $ty:ident)* | "this" | "true" | "false" | "nil" | ( $group:ident ) ;
+        $ty0:ident $(| $ty:ident)* | "true" | "false" | "nil" | "this" | "super" "." $method:ident
+        | ( $group:ident ) ;
     ) => {
         fn $head(&mut self) -> Result<Expr, SyntaxError> {
             use crate::token::Keyword::*;
@@ -704,6 +705,33 @@ macro_rules! rule {
                         unreachable!("matched and advanced to an existing token");
                     };
                     Ok(Expr::Atom(atom))
+                }
+
+                // super.method
+                Ok(LexToken {
+                    token: Token::Keyword(Super),
+                    ..
+                }) => {
+                    let _ = self.advance()?;
+                    let Some(kw_super) = self.current_atom() else {
+                        unreachable!("matched and advanced to an existing token");
+                    };
+
+                    let mut span = kw_super.span.clone();
+
+                    // parse .
+                    span += self.dot(|| format!("after '{Super}'"))?;
+
+                    // parse method
+                    let method = self.$method(|| "superclass method name")?;
+                    span += &method.span;
+
+                    // repr(S-expr): (. super method)
+                    Ok(Expr::Cons(Cons {
+                        op: Operator::Dot,
+                        args: vec![Expr::from(kw_super), Expr::from(method)],
+                        span,
+                    }))
                 }
 
                 Ok(LexToken { token: Token::LeftParen, span, .. }) => {
@@ -959,8 +987,8 @@ impl<'a> Parser<'a> {
                 let ident = self.reigister_ident(x.to_string(), span);
                 return Some(ir::Atom::from(ident));
             }
-            Token::Keyword(This) => {
-                let ident = self.reigister_ident(This.to_string(), span);
+            Token::Keyword(keyword @ (Super | This)) => {
+                let ident = self.reigister_ident(keyword.to_string(), span);
                 return Some(ir::Atom::from(ident));
             }
             _ => ir::Literal::Nil,
@@ -1040,8 +1068,9 @@ impl<'a> Parser<'a> {
     /// unary          → ( "!" | "-" ) unary
     ///                | call ;
     /// call           → primary ( "(" arguments? ")" )* ;
-    /// primary        → NUMBER | STRING | "true" | "false" | "nil"
+    /// primary        → NUMBER | STRING | "true" | "false" | "nil" | "this"
     ///                | "(" expression ")"
+    ///                | "super" "." IDENTIFIER
     ///                | IDENTIFIER ;
     ///
     /// arguments      → expression ( "," expression )* ;
@@ -1069,8 +1098,9 @@ impl<'a> Parser<'a> {
     /// unary          → ( "!" | "-" ) unary
     ///                | call ;
     /// call           → primary ( "(" arguments? ")" )* ;
-    /// primary        → NUMBER | STRING | "this" | "true" | "false" | "nil"
+    /// primary        → NUMBER | STRING | "true" | "false" | "nil" | "this"
     ///                | "(" expression ")"
+    ///                | "super" "." IDENTIFIER
     ///                | IDENTIFIER ;
     ///
     /// arguments      → expression ( "," expression )* ;
@@ -1161,7 +1191,8 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
-        primary     -> Num | Str | Ident | "this" | "true" | "false" | "nil" | ( expression ) ;
+        primary     -> Num | Str | Ident | "true" | "false" | "nil" | "this"
+                       | "super" "." identifier | ( expression ) ;
     }
 
     rule! {
@@ -1187,6 +1218,7 @@ impl<'a> Parser<'a> {
     }
 
     rule! {
+        dot:       Dot;
         semicolon: Semicolon;
         left_paren: LeftParen;
         right_paren: RightParen;

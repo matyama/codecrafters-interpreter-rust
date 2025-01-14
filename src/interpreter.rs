@@ -10,11 +10,9 @@ use std::rc::Rc;
 use crate::error::{RuntimeError, ThrowRuntimeError as _};
 use crate::ir::{self, Atom, Cons, Expr, Literal, Operator, Program};
 use crate::span::Span;
-use crate::token::Keyword;
+use crate::token::{SUPER, THIS};
 
 type RcCell<T> = Rc<RefCell<T>>;
-
-const THIS: &str = Keyword::This.name();
 
 #[inline]
 pub fn evaluate<W: Write>(ast: ir::Ast<Expr>, writer: &mut W) -> Result<Value, RuntimeError> {
@@ -951,26 +949,70 @@ impl Evaluate for Cons {
                 callee.call(args, cx)
             }
 
-            Operator::Dot => {
-                let Some((obj, prop)) = binary_args(&self.args) else {
-                    return Err(self.span.throw("Operands must be two expressions."));
-                };
+            Operator::Dot => match binary_args(&self.args) {
+                // calling superclass methods
+                Some((
+                    ir::Expr::Atom(ir::Atom {
+                        literal: ir::Literal::Ident(id, name),
+                        ..
+                    }),
+                    ir::Expr::Atom(ir::Atom {
+                        literal: ir::Literal::Ident(_, method),
+                        ..
+                    }),
+                )) if name == SUPER => {
+                    // lookup `super` class definition
+                    let Some(&dist) = cx.locals.get(id) else {
+                        return Err(self.span.throw("Undefined reference to 'super'."));
+                    };
 
-                let obj = obj.evaluate(cx)?;
+                    let superclass =
+                        Environment::get_at(Rc::clone(&cx.environment), dist, SUPER, &self.span)?;
 
-                let Some(instance) = obj.downcast_instance() else {
-                    return Err(self.span.throw("Only instances have properties."));
-                };
+                    let Some(superclass) = superclass.downcast_class() else {
+                        return Err(self.span.throw("Operand 'super' must be a class."));
+                    };
 
-                match prop {
-                    Expr::Atom(Atom {
-                        literal: Literal::Ident(_, name),
-                        span,
-                    }) => instance.get(name, span),
+                    // lookup `this` in an environment that is inside the env. where `super` is
+                    let object = Environment::get_at(
+                        Rc::clone(&cx.environment),
+                        dist - 1,
+                        THIS,
+                        &self.span,
+                    )?;
 
-                    expr => Err(expr.span().throw("Invalid property type.")),
+                    let Some(instance) = object.downcast_instance() else {
+                        return Err(self.span.throw("Only instances can bind methods."));
+                    };
+
+                    // lookup the `super` method and bind it to `this`
+                    let method = superclass.find_method(method).ok_or_else(|| {
+                        self.span.throw(format!("Undefined property '{method}'."))
+                    })?;
+
+                    Ok(Value::new(method.bind(instance)))
                 }
-            }
+
+                // property access
+                Some((obj, prop)) => {
+                    let obj = obj.evaluate(cx)?;
+
+                    let Some(instance) = obj.downcast_instance() else {
+                        return Err(self.span.throw("Only instances have properties."));
+                    };
+
+                    match prop {
+                        Expr::Atom(Atom {
+                            literal: Literal::Ident(_, name),
+                            span,
+                        }) => instance.get(name, span),
+
+                        expr => Err(expr.span().throw("Invalid property type.")),
+                    }
+                }
+
+                None => Err(self.span.throw("Operands must be two expressions.")),
+            },
         }
     }
 }
@@ -1014,13 +1056,22 @@ impl Interpret for ir::Class {
 
         cx.environment.borrow_mut().define(&self.name, None);
 
+        let closure = if let Some(superclass) = superclass.as_ref().cloned() {
+            // bind `super` to the superclass inside a new wrapping environment
+            let env = Environment::scope(Rc::clone(&cx.environment));
+            env.borrow_mut().define(SUPER, Some(Value::obj(superclass)));
+            env
+        } else {
+            Rc::clone(&cx.environment)
+        };
+
         let methods = HashMap::from_iter(self.methods.iter().cloned().map(|method| {
             let initializer = method.name == Class::INIT;
             (
                 method.name.clone(),
                 Rc::new(Function {
                     declaration: method,
-                    closure: Rc::clone(&cx.environment),
+                    closure: Rc::clone(&closure),
                     initializer,
                 }),
             )
