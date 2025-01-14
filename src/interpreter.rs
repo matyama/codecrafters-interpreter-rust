@@ -364,7 +364,7 @@ struct Class {
 }
 
 impl Class {
-    const INIT: &str = "init";
+    const INIT: &'static str = "init";
 
     #[inline]
     fn find_method(&self, name: &str) -> Option<Rc<Function>> {
