@@ -1,32 +1,21 @@
-mod error;
-mod interpreter;
-mod ir;
-mod lexer;
-mod parser;
-mod resolver;
-mod span;
-mod token;
-
-use std::env;
-use std::fs;
-use std::io::{self, BufWriter, Write as _};
+use std::io::{BufWriter, Write as _};
 use std::path::Path;
 use std::process::{ExitCode, Termination};
 
-use ir::{Ast, Expr};
-use lexer::Lexer;
-use token::EOF;
+use crate::tree_walk::{Ast, Expr, Lexer, EOF};
+
+mod tree_walk;
 
 fn read_file_contents(file: impl AsRef<Path>) -> String {
     let file = file.as_ref();
-    fs::read_to_string(file).unwrap_or_else(|_| {
+    std::fs::read_to_string(file).unwrap_or_else(|_| {
         eprintln!("Failed to read file {file:?}");
         String::new()
     })
 }
 
 fn main() -> impl Termination {
-    let args = env::args().collect::<Vec<_>>();
+    let args = std::env::args().collect::<Vec<_>>();
 
     if args.len() < 3 {
         eprintln!("Usage: {} tokenize <filename>", args[0]);
@@ -36,10 +25,10 @@ fn main() -> impl Termination {
     let command = &args[1];
     let filename = &args[2];
 
+    let source = read_file_contents(filename);
+
     match command.as_str() {
         "tokenize" => {
-            let source = read_file_contents(filename);
-
             let mut exit_code = ExitCode::SUCCESS;
 
             for token in Lexer::new(&source) {
@@ -57,35 +46,29 @@ fn main() -> impl Termination {
             exit_code
         }
 
-        "parse" => {
-            let source = read_file_contents(filename);
-
-            match source.parse::<Ast<Expr>>() {
-                Ok(Ast { tree, .. }) => {
-                    println!("{tree}");
-                    ExitCode::SUCCESS
-                }
-                Err(error) => {
-                    eprintln!("{error}");
-                    error.report()
-                }
+        "parse" => match source.parse::<Ast<Expr>>() {
+            Ok(Ast { tree, .. }) => {
+                println!("{tree}");
+                ExitCode::SUCCESS
             }
-        }
+            Err(error) => {
+                eprintln!("{error}");
+                error.report()
+            }
+        },
 
         "evaluate" => {
-            let source = read_file_contents(filename);
-
-            let analyze = |ast| resolver::resolve(&source, ast);
+            let analyze = |ast| tree_walk::resolve(&source, ast);
 
             let ast = match source.parse().and_then(analyze) {
                 Ok(ast) => ast,
                 Err(error) => return error.report(),
             };
 
-            let stdout = io::stdout().lock();
+            let stdout = std::io::stdout().lock();
             let mut writer = BufWriter::new(stdout);
 
-            let result = interpreter::evaluate(ast, &mut writer);
+            let result = tree_walk::evaluate(ast, &mut writer);
 
             if let Err(error) = writer.flush() {
                 eprintln!("{error}");
@@ -105,9 +88,7 @@ fn main() -> impl Termination {
         }
 
         "run" => {
-            let source = read_file_contents(filename);
-
-            let analyze = |ast| resolver::resolve(&source, ast);
+            let analyze = |ast| tree_walk::resolve(&source, ast);
 
             let ast = match source.parse().and_then(analyze) {
                 Ok(ast) => ast,
@@ -117,10 +98,10 @@ fn main() -> impl Termination {
                 }
             };
 
-            let stdout = io::stdout().lock();
+            let stdout = std::io::stdout().lock();
             let mut writer = BufWriter::new(stdout);
 
-            let result = interpreter::interpret(ast, &mut writer);
+            let result = tree_walk::interpret(ast, &mut writer);
 
             if let Err(error) = writer.flush() {
                 eprintln!("{error}");

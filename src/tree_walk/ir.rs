@@ -3,8 +3,8 @@ use std::fmt::Display;
 use std::ops::Add;
 use std::rc::Rc;
 
-use crate::span::Span;
-use crate::token::{Keyword, Token};
+use crate::tree_walk::span::Span;
+use crate::tree_walk::token::{Keyword, Token};
 
 #[derive(Debug)]
 pub struct Ast<T> {

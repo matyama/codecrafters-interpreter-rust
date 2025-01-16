@@ -7,10 +7,10 @@ use std::mem;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 
-use crate::error::{RuntimeError, ThrowRuntimeError as _};
-use crate::ir::{self, Atom, Cons, Expr, Literal, Operator, Program};
-use crate::span::Span;
-use crate::token::{SUPER, THIS};
+use crate::tree_walk::error::{RuntimeError, ThrowRuntimeError as _};
+use crate::tree_walk::ir::{self, Atom, Cons, Expr, Literal, Operator, Program};
+use crate::tree_walk::span::Span;
+use crate::tree_walk::token::{SUPER, THIS};
 
 type RcCell<T> = Rc<RefCell<T>>;
 
@@ -1204,13 +1204,13 @@ impl Interpret for ir::Return {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resolver::resolve;
+    use crate::tree_walk::resolver::resolve;
     use std::io::BufWriter;
 
     #[test]
     fn scoped_blocks() {
-        let input = include_str!("../tests/ui/run/scopes/test_case_1.lox");
-        let expected = include_str!("../tests/ui/run/scopes/test_case_1.out");
+        let input = include_str!("../../tests/ui/run/scopes/test_case_1.lox");
+        let expected = include_str!("../../tests/ui/run/scopes/test_case_1.out");
 
         let mut writer = BufWriter::new(Vec::new());
 

@@ -2,10 +2,10 @@ use std::collections::hash_map::{Entry, HashMap};
 use std::mem;
 use std::ops::{Deref, DerefMut};
 
-use crate::error::{ErrLoc, SyntaxError};
-use crate::ir;
-use crate::span::Span;
-use crate::token::{Keyword, SUPER, THIS};
+use crate::tree_walk::error::{ErrLoc, SyntaxError};
+use crate::tree_walk::ir;
+use crate::tree_walk::span::Span;
+use crate::tree_walk::token::{Keyword, SUPER, THIS};
 
 pub fn resolve<T: Resolve>(source: &str, ast: ir::Ast<T>) -> Result<ir::Ast<T>, SyntaxError> {
     let ir::Ast { tree, meta } = ast;

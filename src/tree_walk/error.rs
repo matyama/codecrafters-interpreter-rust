@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::fmt::{Debug, Display};
 use std::process::{ExitCode, Termination};
 
-use crate::span::Span;
+use crate::tree_walk::span::Span;
 
 #[derive(thiserror::Error)]
 #[error("[line {}] Error{context}: {source}", span.lineno)]

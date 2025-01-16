@@ -1,7 +1,7 @@
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, Deref};
 
-use crate::error::{RuntimeError, ThrowRuntimeError};
+use crate::tree_walk::error::{RuntimeError, ThrowRuntimeError};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span {

@@ -2,14 +2,14 @@ use std::iter::Peekable;
 use std::rc::Rc;
 use std::str::FromStr;
 
-use crate::error::{ErrLoc, SyntaxError};
-use crate::ir::{
+use crate::tree_walk::error::{ErrLoc, SyntaxError};
+use crate::tree_walk::ir::{
     self, AssignTarget, Atom, Block, Cons, Decl, Expr, Fun, Function, Ident, If, Operator, Print,
     Program, Return, Stmt, Var, While,
 };
-use crate::lexer::{Lexer, TokenStream};
-use crate::span::Span;
-use crate::token::{Keyword, LexToken, Literal, Token};
+use crate::tree_walk::lexer::{Lexer, TokenStream};
+use crate::tree_walk::span::Span;
+use crate::tree_walk::token::{Keyword, LexToken, Literal, Token};
 
 const MAX_ARGS: usize = 255;
 
@@ -670,7 +670,7 @@ macro_rules! rule {
         | ( $group:ident ) ;
     ) => {
         fn $head(&mut self) -> Result<Expr, SyntaxError> {
-            use crate::token::Keyword::*;
+            use super::token::Keyword::*;
 
             let Ok(next) = self.peek() else {
                 let Err(error) = self.advance() else {
@@ -971,7 +971,7 @@ impl<'a> Parser<'a> {
 
     // parse the current token as an atom
     fn current_atom(&mut self) -> Option<ir::Atom> {
-        use crate::token::{Keyword::*, Literal::*};
+        use super::token::{Keyword::*, Literal::*};
 
         let t = self.current.as_ref()?;
 

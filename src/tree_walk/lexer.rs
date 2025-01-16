@@ -3,9 +3,9 @@ use std::fmt::Debug;
 use std::iter::Peekable;
 use std::str::Chars;
 
-use crate::error::SyntaxError;
-use crate::span::Span;
-use crate::token::{LexToken, Literal, Token};
+use crate::tree_walk::error::SyntaxError;
+use crate::tree_walk::span::Span;
+use crate::tree_walk::token::{LexToken, Literal, Token};
 
 use self::matcher::*;
 
