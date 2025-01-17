@@ -1,7 +1,8 @@
 use std::fmt::Display;
 
-use crate::bytecode_vm::value::Value;
-use crate::bytecode_vm::{Captures, Disassemble, OpCode};
+use super::error::UnknownOpCode;
+use super::value::Value;
+use super::{Captures, Disassemble, OpCode};
 
 const MAX_SMALL: u32 = u8::MAX as u32;
 const MIN_LONG: u32 = MAX_SMALL + 1;
@@ -20,9 +21,24 @@ impl Chunk {
         Self::default()
     }
 
+    #[inline]
+    pub fn code(&self) -> &[u8] {
+        &self.code
+    }
+
+    #[inline]
+    pub fn constants(&self) -> &[Value] {
+        &self.constants
+    }
+
     pub fn write(&mut self, byte: u8, line: u32) {
         self.code.push(byte);
         self.lines.push(line);
+    }
+
+    #[inline]
+    pub fn write_op(&mut self, op: OpCode, line: u32) {
+        self.write(op as u8, line)
     }
 
     pub fn write_const(&mut self, value: Value, line: u32) {
@@ -64,12 +80,37 @@ impl Chunk {
         }
     }
 
+    pub fn instruction(&self, offset: usize) -> Result<Option<Instruction<'_>>, UnknownOpCode> {
+        use OpCode::*;
+
+        let Some(opcode) = self.code.get(offset) else {
+            return Ok(None);
+        };
+
+        match OpCode::try_from(opcode) {
+            Ok(op @ (Constant | ConstantLong)) => {
+                Ok(Some(Instruction::Const(op.name(), self, offset)))
+            }
+
+            Ok(op @ (Neg | Add | Sub | Mul | Div | Return)) => {
+                Ok(Some(Instruction::Simple(op.name(), self, offset)))
+            }
+
+            Err(opcode) => Err(UnknownOpCode { offset, opcode }),
+        }
+    }
+
     #[inline]
     fn instructions(&self) -> impl Iterator<Item = Result<Instruction<'_>, UnknownOpCode>> {
         InstructionIter::new(self)
     }
 
-    fn line(&self, offset: usize) -> LineInfo {
+    #[inline]
+    pub fn line(&self, offset: usize) -> usize {
+        self.lines[offset].line() as usize
+    }
+
+    fn line_info(&self, offset: usize) -> LineInfo {
         // TODO: optimization - impl this directly on Lines instead of two index accesses
         let line = self.lines[offset].line();
         if offset > 0 && line == self.lines[offset - 1].line() {
@@ -87,7 +128,7 @@ impl Disassemble for Chunk {
     }
 }
 
-enum Instruction<'a> {
+pub(crate) enum Instruction<'a> {
     Simple(&'a str, &'a Chunk, usize),
     Const(&'a str, &'a Chunk, usize),
 }
@@ -96,11 +137,11 @@ impl Display for Instruction<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Simple(name, chunk, offset) => {
-                let line = chunk.line(*offset);
+                let line = chunk.line_info(*offset);
                 writeln!(f, "{offset:04} {line} {name}")
             }
             Self::Const(name, chunk, offset) => {
-                let line = chunk.line(*offset);
+                let line = chunk.line_info(*offset);
                 let constant = chunk.read_const(*offset);
                 let value = &chunk.constants[constant as usize];
                 writeln!(f, "{offset:04} {line} {name:-16} {constant:4} '{value}'")
@@ -198,10 +239,6 @@ impl Display for LineInfo {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("{0:04} Unknown opcode {1}")]
-struct UnknownOpCode(usize, u8);
-
 struct InstructionIter<'a> {
     chunk: &'a Chunk,
     offset: usize,
@@ -218,17 +255,19 @@ impl<'a> Iterator for InstructionIter<'a> {
     type Item = Result<Instruction<'a>, UnknownOpCode>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        use OpCode::*;
+
         let opcode = self.chunk.code.get(self.offset)?;
 
         Some(match OpCode::try_from(opcode) {
-            Ok(op @ (OpCode::Constant | OpCode::ConstantLong)) => {
+            Ok(op @ (Constant | ConstantLong)) => {
                 let meta = op.meta();
                 let instr = Instruction::Const(meta.name, self.chunk, self.offset);
                 self.offset += meta.len;
                 Ok(instr)
             }
 
-            Ok(op @ OpCode::Return) => {
+            Ok(op @ (Neg | Add | Sub | Mul | Div | Return)) => {
                 let meta = op.meta();
                 let instr = Instruction::Simple(meta.name, self.chunk, self.offset);
                 self.offset += meta.len;
@@ -236,7 +275,10 @@ impl<'a> Iterator for InstructionIter<'a> {
             }
 
             Err(opcode) => {
-                let error = UnknownOpCode(self.offset, opcode);
+                let error = UnknownOpCode {
+                    offset: self.offset,
+                    opcode,
+                };
                 self.offset += 1;
                 Err(error)
             }
@@ -319,7 +361,7 @@ mod tests {
         let mut chunk = Chunk::new();
 
         chunk.write_const(Value(1.2), 123);
-        chunk.write(OpCode::Return as u8, 123);
+        chunk.write_op(OpCode::Return, 123);
 
         let actual = chunk.disassemble("test chunk").to_string();
 

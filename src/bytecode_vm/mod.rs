@@ -1,57 +1,78 @@
 #![allow(dead_code)]
 
 mod bytecode;
+mod error;
 mod value;
+mod vm;
 
 pub trait Captures<U> {}
 impl<T: ?Sized, U> Captures<U> for T {}
 
-#[derive(Debug)]
-#[repr(u8)]
-pub enum OpCode {
-    Constant = 0,
-    ConstantLong = 1,
-    Return = 2,
-}
+macro_rules! opcode {
+    (
+        $ident:ident {
+            $(
+                $variant:ident = {
+                    opcode: $opcode:literal,
+                    name: $name:literal,
+                    len: $len:literal
+                },
+            )+
+        }
+    ) => {
+        #[derive(Debug)]
+        #[repr(u8)]
+        pub enum $ident {
+            $($variant = $opcode,)+
+        }
 
-impl OpCode {
-    pub(crate) const fn meta(self) -> OpMeta {
-        match self {
-            Self::Constant => OpMeta {
-                name: "OP_CONSTANT",
-                len: 2,
-            },
-            Self::ConstantLong => OpMeta {
-                name: "OP_CONSTANT_LONG",
-                len: 4,
-            },
-            Self::Return => OpMeta {
-                name: "OP_RETURN",
-                len: 1,
-            },
+        impl $ident {
+            /// Returns the display name of this [$ident]
+            pub(crate) const fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name,)+
+                }
+            }
+
+            pub(crate) const fn meta(self) -> OpMeta {
+                match self {
+                    $(Self::$variant => OpMeta { name: $name, len: $len },)+
+                }
+            }
+        }
+
+        impl TryFrom<u8> for $ident {
+            type Error = u8;
+
+            fn try_from(opcode: u8) -> Result<Self, Self::Error> {
+                match opcode {
+                    $($opcode => Ok(Self::$variant),)+
+                    b => Err(b),
+                }
+            }
+        }
+
+        impl TryFrom<&u8> for $ident {
+            type Error = u8;
+
+            #[inline]
+            fn try_from(opcode: &u8) -> Result<Self, Self::Error> {
+                Self::try_from(*opcode)
+            }
         }
     }
 }
 
-impl TryFrom<u8> for OpCode {
-    type Error = u8;
-
-    fn try_from(opcode: u8) -> Result<Self, Self::Error> {
-        match opcode {
-            0 => Ok(Self::Constant),
-            1 => Ok(Self::ConstantLong),
-            2 => Ok(Self::Return),
-            b => Err(b),
-        }
-    }
-}
-
-impl TryFrom<&u8> for OpCode {
-    type Error = u8;
-
-    #[inline]
-    fn try_from(opcode: &u8) -> Result<Self, Self::Error> {
-        Self::try_from(*opcode)
+opcode! {
+    OpCode {
+        Constant = { opcode: 0, name: "OP_CONSTANT", len: 2 },
+        ConstantLong = { opcode: 1, name: "OP_CONSTANT_LONG", len: 4 },
+        Neg = { opcode: 2, name: "OP_NEGATE", len: 2 },
+        Add = { opcode: 3, name: "OP_ADD", len: 3 },
+        Sub = { opcode: 4, name: "OP_SUBTRACT", len: 3 },
+        Mul = { opcode: 5, name: "OP_MULTIPLY", len: 3 },
+        Div = { opcode: 6, name: "OP_DIVIDE", len: 3 },
+        Return = { opcode: 7, name: "OP_RETURN", len: 1 },
     }
 }
 
