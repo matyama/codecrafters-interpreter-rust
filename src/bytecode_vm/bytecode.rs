@@ -3,6 +3,10 @@ use std::fmt::Display;
 use crate::bytecode_vm::value::Value;
 use crate::bytecode_vm::{Captures, Disassemble, OpCode};
 
+const MAX_SMALL: u32 = u8::MAX as u32;
+const MIN_LONG: u32 = MAX_SMALL + 1;
+const MAX_LONG: u32 = 16_777_216 - 1; // 2^24 - 1
+
 #[derive(Debug, Default)]
 pub struct Chunk {
     code: Vec<u8>,
@@ -21,11 +25,43 @@ impl Chunk {
         self.lines.push(line);
     }
 
-    pub fn add_constant(&mut self, value: Value) -> u8 {
-        // TODO: add support for larger value arrays
-        let offset = self.constants.len() as u8;
+    pub fn write_const(&mut self, value: Value, line: u32) {
+        let Ok(offset) = u32::try_from(self.constants.len()) else {
+            panic!("chunk can store only {MAX_LONG} constants");
+        };
+
         self.constants.push(value);
-        offset
+
+        match offset {
+            ..=MAX_SMALL => {
+                let bytes = [OpCode::Constant as u8, offset as u8];
+                self.code.extend_from_slice(&bytes);
+                self.lines.repeat(2, line);
+            }
+            MIN_LONG..=MAX_LONG => {
+                let mut bytes = offset.to_be_bytes();
+                bytes[0] = OpCode::ConstantLong as u8;
+                self.code.extend_from_slice(&bytes);
+                self.lines.repeat(4, line);
+            }
+            _ => unreachable!("u32::MAX > MAX_LONG"),
+        }
+    }
+
+    /// Read the index into the `constants` array given an instruction `offset`.
+    ///
+    /// Note that the `offset` points to the first byte of the instruction, that is to the opcode.
+    fn read_const(&self, offset: usize) -> u32 {
+        match OpCode::try_from(self.code[offset]) {
+            Ok(OpCode::Constant) => self.code[offset + 1] as u32,
+            Ok(OpCode::ConstantLong) => {
+                let mut bytes = [0; 4];
+                bytes.copy_from_slice(&self.code[offset..offset + 4]);
+                bytes[0] = 0;
+                u32::from_be_bytes(bytes)
+            }
+            opcode => panic!("{opcode:?} is not a constant"),
+        }
     }
 
     #[inline]
@@ -65,7 +101,7 @@ impl Display for Instruction<'_> {
             }
             Self::Const(name, chunk, offset) => {
                 let line = chunk.line(*offset);
-                let constant = chunk.code[*offset + 1];
+                let constant = chunk.read_const(*offset);
                 let value = &chunk.constants[constant as usize];
                 writeln!(f, "{offset:04} {line} {name:-16} {constant:4} '{value}'")
             }
@@ -86,13 +122,8 @@ struct Line(u64);
 
 impl Line {
     #[inline]
-    const fn encode(repeats: u32, line: u32) -> u64 {
-        ((repeats as u64) << u32::BITS) | line as u64
-    }
-
-    #[inline]
-    const fn new(line: u32) -> Self {
-        Self(Self::encode(1, line))
+    const fn new(repeats: u32, line: u32) -> Self {
+        Self(((repeats as u64) << u32::BITS) | line as u64)
     }
 
     #[inline]
@@ -105,10 +136,10 @@ impl Line {
         (self.0 >> u32::BITS) as u32
     }
 
-    /// Increment the repeat count
+    /// Increment the repeat count by `n`
     #[inline]
-    fn repeat(&mut self) {
-        self.0 += 1u64 << u32::BITS;
+    fn repeat(&mut self, n: u32) {
+        self.0 += (n as u64) << u32::BITS;
     }
 }
 
@@ -120,10 +151,15 @@ impl Line {
 struct Lines(Vec<Line>);
 
 impl Lines {
+    #[inline]
     fn push(&mut self, line: u32) {
+        self.repeat(1, line);
+    }
+
+    fn repeat(&mut self, n: u32, line: u32) {
         match self.0.last_mut() {
-            Some(last) if last.line() == line => last.repeat(),
-            _ => self.0.push(Line::new(line)),
+            Some(last) if last.line() == line => last.repeat(n),
+            _ => self.0.push(Line::new(n, line)),
         }
     }
 }
@@ -185,7 +221,7 @@ impl<'a> Iterator for InstructionIter<'a> {
         let opcode = self.chunk.code.get(self.offset)?;
 
         Some(match OpCode::try_from(opcode) {
-            Ok(op @ OpCode::Constant) => {
+            Ok(op @ (OpCode::Constant | OpCode::ConstantLong)) => {
                 let meta = op.meta();
                 let instr = Instruction::Const(meta.name, self.chunk, self.offset);
                 self.offset += meta.len;
@@ -282,14 +318,31 @@ mod tests {
 
         let mut chunk = Chunk::new();
 
-        let constant = chunk.add_constant(Value(1.2));
-        chunk.write(OpCode::Constant as u8, 123);
-        chunk.write(constant, 123);
-
+        chunk.write_const(Value(1.2), 123);
         chunk.write(OpCode::Return as u8, 123);
 
         let actual = chunk.disassemble("test chunk").to_string();
 
         debug_assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn many_constants() {
+        let mut chunk = Chunk::new();
+
+        for i in 0..MIN_LONG {
+            chunk.write_const(Value(i as f64), 1);
+        }
+
+        chunk.write_const(Value(1_000.0), 2);
+
+        let output = chunk.disassemble("test long chunk").to_string();
+        let last = output
+            .lines()
+            .last()
+            .expect("non-empty disassembly")
+            .trim_end();
+
+        assert_eq!("0512    2 OP_CONSTANT_LONG  256 '1000'", last);
     }
 }

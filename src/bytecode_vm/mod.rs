@@ -6,13 +6,12 @@ mod value;
 pub trait Captures<U> {}
 impl<T: ?Sized, U> Captures<U> for T {}
 
-// TODO: Challenge 2: https://craftinginterpreters.com/chunks-of-bytecode.html#challenges
-//  - Add ConstantLong = 1 which stores the operand as a 24-bit number (i.e., meta.len=4)
 #[derive(Debug)]
 #[repr(u8)]
 pub enum OpCode {
     Constant = 0,
-    Return = 1,
+    ConstantLong = 1,
+    Return = 2,
 }
 
 impl OpCode {
@@ -21,6 +20,10 @@ impl OpCode {
             Self::Constant => OpMeta {
                 name: "OP_CONSTANT",
                 len: 2,
+            },
+            Self::ConstantLong => OpMeta {
+                name: "OP_CONSTANT_LONG",
+                len: 4,
             },
             Self::Return => OpMeta {
                 name: "OP_RETURN",
@@ -36,7 +39,8 @@ impl TryFrom<u8> for OpCode {
     fn try_from(opcode: u8) -> Result<Self, Self::Error> {
         match opcode {
             0 => Ok(Self::Constant),
-            1 => Ok(Self::Return),
+            1 => Ok(Self::ConstantLong),
+            2 => Ok(Self::Return),
             b => Err(b),
         }
     }
