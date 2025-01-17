@@ -4,6 +4,7 @@ use std::process::{ExitCode, Termination};
 
 use crate::tree_walk::{Ast, Expr, Lexer, EOF};
 
+mod bytecode_vm;
 mod tree_walk;
 
 fn read_file_contents(file: impl AsRef<Path>) -> String {
@@ -18,7 +19,7 @@ fn main() -> impl Termination {
     let args = std::env::args().collect::<Vec<_>>();
 
     if args.len() < 3 {
-        eprintln!("Usage: {} tokenize <filename>", args[0]);
+        eprintln!("Usage: {} <command> <filename>", args[0]);
         return ExitCode::from(64);
     }
 
