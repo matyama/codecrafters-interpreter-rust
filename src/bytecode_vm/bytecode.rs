@@ -4,9 +4,9 @@ use super::error::UnknownOpCode;
 use super::value::Value;
 use super::{Captures, Disassemble, OpCode};
 
-const MAX_SMALL: u32 = u8::MAX as u32;
-const MIN_LONG: u32 = MAX_SMALL + 1;
-const MAX_LONG: u32 = 16_777_216 - 1; // 2^24 - 1
+pub(crate) const MAX_SMALL: u32 = u8::MAX as u32;
+pub(crate) const MIN_LONG: u32 = MAX_SMALL + 1;
+pub(crate) const MAX_LONG: u32 = 16_777_216 - 1; // 2^24 - 1
 
 #[derive(Debug, Default)]
 pub struct Chunk {
@@ -56,7 +56,8 @@ impl Chunk {
             }
             MIN_LONG..=MAX_LONG => {
                 let mut bytes = offset.to_be_bytes();
-                bytes[0] = OpCode::ConstantLong as u8;
+                // SAFETY: bytes is a properly initialized (and aligned) array
+                unsafe { bytes.as_mut_ptr().write(OpCode::ConstantLong as u8) }
                 self.code.extend_from_slice(&bytes);
                 self.lines.repeat(4, line);
             }
@@ -71,10 +72,10 @@ impl Chunk {
         match OpCode::try_from(self.code[offset]) {
             Ok(OpCode::Constant) => self.code[offset + 1] as u32,
             Ok(OpCode::ConstantLong) => {
-                let mut bytes = [0; 4];
-                bytes.copy_from_slice(&self.code[offset..offset + 4]);
-                bytes[0] = 0;
-                u32::from_be_bytes(bytes)
+                let bytes = &self.code[offset..offset + 4];
+                // SAFETY: the offset range has length of 4, so casting &[u8] to &[u8; 4] is safe
+                let bytes = unsafe { &*(bytes as *const [u8] as *const [u8; 4]) };
+                u32::from_be_bytes(*bytes) & 0x00ffffff
             }
             opcode => panic!("{opcode:?} is not a constant"),
         }

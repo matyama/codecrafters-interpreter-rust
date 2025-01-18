@@ -77,10 +77,13 @@ impl<'a, W: Write> VM<'a, W> {
             }};
         }
 
-        // TODO: parametrize by n:expr => Constant vs ConstantLong
         macro_rules! read_constant {
-            () => {{
+            (bytes = 1) => {{
                 &chunk.constants()[read_byte!() as usize]
+            }};
+            (bytes = 3) => {{
+                &chunk.constants()
+                    [u32::from_be_bytes([0, read_byte!(), read_byte!(), read_byte!()]) as usize]
             }};
         }
 
@@ -170,13 +173,16 @@ impl<'a, W: Write> VM<'a, W> {
 
                 // load a constant and push it on top of the current stack
                 OpCode::Constant => {
-                    let constant = read_constant!();
+                    let constant = read_constant!(bytes = 1);
                     // XXX: really need a cheap clone here
                     self.stack.push(constant.clone());
                 }
 
-                // TODO: handle OpCode::ConstantLong
-                opcode => unimplemented!("{opcode:?}"),
+                OpCode::ConstantLong => {
+                    let constant = read_constant!(bytes = 3);
+                    // XXX: really need a cheap clone here
+                    self.stack.push(constant.clone());
+                }
             }
         }
     }
@@ -206,6 +212,28 @@ mod tests {
         let output = String::from_utf8(writer).expect("UTF-8 output");
         let result = output.lines().last().expect("some value");
         assert_eq!(result, "-0.8214285714285714");
+    }
+
+    #[test]
+    fn interpret_chunk_const_long() {
+        use crate::bytecode_vm::bytecode::MIN_LONG;
+
+        let mut writer = Vec::new();
+        let mut vm = VM::new(&mut writer);
+
+        let mut chunk = Chunk::new();
+        for _ in 0..MIN_LONG {
+            chunk.write_const(Value(1.0), 123);
+        }
+        chunk.write_const(Value(1_000.0), 123);
+        chunk.write_op(OpCode::Neg, 123);
+        chunk.write_op(OpCode::Return, 123);
+
+        vm.interpret(&chunk).expect("chunk interpreted");
+
+        let output = String::from_utf8(writer).expect("UTF-8 output");
+        let result = output.lines().last().expect("some value");
+        assert_eq!(result, "-1000");
     }
 
     #[test]
