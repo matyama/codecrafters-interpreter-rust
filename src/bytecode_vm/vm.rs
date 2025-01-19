@@ -90,15 +90,20 @@ impl<'a, W: Write> VM<'a, W> {
         // TODO: values other than f64
         macro_rules! binary_op {
             ($opcode:expr, $op:tt, $offset:expr) => {{
-                let Value(rhs) = self.stack.pop().ok_or_else(|| RuntimeError {
-                    line: chunk.line($offset),
-                    source: format!("{}: no value on stack", $opcode.name()).into(),
-                })?;
-                let Value(lhs) = self.stack.pop().ok_or_else(|| RuntimeError {
-                    line: chunk.line($offset),
-                    source: format!("{}: no value on stack", $opcode.name()).into(),
-                })?;
-                self.stack.push(Value(lhs $op rhs));
+                let r = self.stack.as_mut_ptr_range();
+                let new_len = self.stack.len() - 1;
+                if new_len < 1 {
+                    return Err(Error::RuntimeError(RuntimeError {
+                        line: chunk.line($offset),
+                        source: format!("{}: no value on stack", $opcode.name()).into(),
+                    }));
+                }
+                // SAFETY: we have exclusive access to the stack and know it has at least 2 values
+                let rhs = unsafe { &mut *r.end.sub(1) };
+                let lhs = unsafe { &mut *r.end.sub(2) };
+                lhs.0 $op rhs.0;
+                // SAFETY: we're just "popping out" the lhs
+                unsafe { self.stack.set_len(new_len) };
             }};
         }
 
@@ -156,20 +161,24 @@ impl<'a, W: Write> VM<'a, W> {
                     });
                 }
 
-                // TODO: negate the stack value in place
                 op @ OpCode::Neg => {
-                    let Value(v) = self.stack.pop().ok_or_else(|| RuntimeError {
-                        line: chunk.line(offset),
-                        source: format!("{}: no value on stack", op.name()).into(),
-                    })?;
-                    self.stack.push(Value(-v));
+                    let r = self.stack.as_mut_ptr_range();
+                    if r.is_empty() {
+                        return Err(Error::RuntimeError(RuntimeError {
+                            line: chunk.line(offset),
+                            source: format!("{}: no value on stack", op.name()).into(),
+                        }));
+                    }
+                    // SAFETY: we have exclusive access to the stack and know it's non-empty
+                    let top = unsafe { &mut *r.end.sub(1) };
+                    top.0 = -top.0;
                 }
 
                 // binary arithmetic operations: pop two values from the stack and push result back
-                OpCode::Add => binary_op!(OpCode::Add, +, offset),
-                OpCode::Sub => binary_op!(OpCode::Sub, -, offset),
-                OpCode::Mul => binary_op!(OpCode::Mul, *, offset),
-                OpCode::Div => binary_op!(OpCode::Div, /, offset),
+                OpCode::Add => binary_op!(OpCode::Add, +=, offset),
+                OpCode::Sub => binary_op!(OpCode::Sub, -=, offset),
+                OpCode::Mul => binary_op!(OpCode::Mul, *=, offset),
+                OpCode::Div => binary_op!(OpCode::Div, /=, offset),
 
                 // load a constant and push it on top of the current stack
                 OpCode::Constant => {
