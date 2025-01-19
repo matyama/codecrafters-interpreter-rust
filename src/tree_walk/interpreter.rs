@@ -521,8 +521,7 @@ impl Environment {
 
                     let enclosing = env
                         .enclosing
-                        .as_ref()
-                        .map(Rc::clone)
+                        .clone()
                         .ok_or_else(|| span.throw(format!("Undefined variable '{var}'.")))?;
 
                     drop(env);
@@ -565,8 +564,7 @@ impl Environment {
                 None => {
                     let enclosing = env
                         .enclosing
-                        .as_ref()
-                        .map(Rc::clone)
+                        .clone()
                         .ok_or_else(|| span.throw(format!("Undefined variable '{var}'.")))?;
 
                     drop(env);
@@ -590,7 +588,7 @@ impl Environment {
     fn ancestor(mut this: RcCell<Self>, dist: usize) -> Option<RcCell<Self>> {
         for _ in 0..dist {
             let env = this.borrow();
-            let enclosing = this.borrow().enclosing.as_ref().map(Rc::clone)?;
+            let enclosing = this.borrow().enclosing.clone()?;
             drop(env);
             this = enclosing;
         }
