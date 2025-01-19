@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::fmt::{Display, Write as _};
 
-use crate::tree_walk::span::Span;
+use crate::span::Span;
 
 pub const THIS: &str = Keyword::This.name();
 pub const SUPER: &str = Keyword::Super.name();

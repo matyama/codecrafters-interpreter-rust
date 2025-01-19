@@ -7,10 +7,11 @@ use std::mem;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 
-use crate::tree_walk::error::{RuntimeError, ThrowRuntimeError as _};
-use crate::tree_walk::ir::{self, Atom, Cons, Expr, Literal, Operator, Program};
-use crate::tree_walk::span::Span;
-use crate::tree_walk::token::{SUPER, THIS};
+use crate::error::{RuntimeError, ThrowRuntimeError as _};
+use crate::span::Span;
+use crate::token::{SUPER, THIS};
+
+use super::ir::{self, Atom, Cons, Expr, Literal, Operator, Program};
 
 type RcCell<T> = Rc<RefCell<T>>;
 

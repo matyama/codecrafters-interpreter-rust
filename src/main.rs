@@ -2,9 +2,15 @@ use std::io::{BufWriter, Write as _};
 use std::path::Path;
 use std::process::{ExitCode, Termination};
 
-use crate::tree_walk::{Ast, Expr, Lexer, EOF};
+use crate::lexer::Lexer;
+use crate::token::EOF;
+use crate::tree_walk::{Ast, Expr};
 
 mod bytecode_vm;
+mod error;
+mod lexer;
+mod span;
+mod token;
 mod tree_walk;
 
 fn read_file_contents(file: impl AsRef<Path>) -> String {

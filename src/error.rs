@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::fmt::{Debug, Display};
 use std::process::{ExitCode, Termination};
 
-use crate::tree_walk::span::Span;
+use crate::span::Span;
 
 #[derive(thiserror::Error)]
 #[error("[line {}] Error{context}: {source}", span.lineno)]
@@ -72,6 +72,30 @@ pub(crate) trait ThrowRuntimeError {
     fn throw(&self, msg: impl Display) -> RuntimeError;
 }
 
+#[derive(Debug, Default)]
+pub enum ErrLoc {
+    At(Cow<'static, str>),
+    #[default]
+    Eof,
+}
+
+impl ErrLoc {
+    #[inline]
+    pub fn at(loc: impl AsRef<str>) -> Self {
+        Self::At(Cow::Owned(format!(" at '{}'", loc.as_ref())))
+    }
+}
+
+impl From<ErrLoc> for Cow<'static, str> {
+    #[inline]
+    fn from(loc: ErrLoc) -> Self {
+        match loc {
+            ErrLoc::At(loc) => loc,
+            ErrLoc::Eof => Cow::Borrowed(" at end"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,29 +131,5 @@ mod tests {
 
         let expected = "Operands must be numbers.\n[line 1]";
         assert_eq!(expected.to_string(), error.to_string());
-    }
-}
-
-#[derive(Debug, Default)]
-pub enum ErrLoc {
-    At(Cow<'static, str>),
-    #[default]
-    Eof,
-}
-
-impl ErrLoc {
-    #[inline]
-    pub fn at(loc: impl AsRef<str>) -> Self {
-        Self::At(Cow::Owned(format!(" at '{}'", loc.as_ref())))
-    }
-}
-
-impl From<ErrLoc> for Cow<'static, str> {
-    #[inline]
-    fn from(loc: ErrLoc) -> Self {
-        match loc {
-            ErrLoc::At(loc) => loc,
-            ErrLoc::Eof => Cow::Borrowed(" at end"),
-        }
     }
 }

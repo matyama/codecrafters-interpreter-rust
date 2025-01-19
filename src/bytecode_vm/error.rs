@@ -22,6 +22,8 @@ impl Termination for CompileError {
     }
 }
 
+// TODO: replace with `crate::error::RuntimeError`
+//  - this involves generalizing bytecode Chunk to use Span instead of Line
 #[derive(Debug, thiserror::Error)]
 #[error("{source}\n[line {line}]")]
 pub struct RuntimeError {
