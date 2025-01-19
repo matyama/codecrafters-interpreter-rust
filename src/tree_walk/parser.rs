@@ -221,7 +221,7 @@ macro_rules! rule {
                 return Ok(None);
             };
 
-            let mut span = span.clone();
+            let mut span = *span;
             let _ = self.advance()?;
 
             // mandatory variable identifier
@@ -505,7 +505,7 @@ macro_rules! rule {
                     return Ok(None);
                 };
 
-                let mut span = span.clone();
+                let mut span = *span;
                 let _ = self.advance()?;
 
                 // TODO: generalize to other kinds of statements
@@ -571,7 +571,7 @@ macro_rules! rule {
                         unreachable!("peeked next token");
                     };
 
-                    let mut span = op.span.clone();
+                    let mut span = op.span;
 
                     let Some(op) = <Option<Operator>>::from(&op.token) else {
                         let loc = ErrLoc::at(&op.lexeme);
@@ -605,7 +605,7 @@ macro_rules! rule {
                     let Ok(op) = self.advance()? else {
                         unreachable!("peeked next token");
                     };
-                    let mut span = op.span.clone();
+                    let mut span = op.span;
                     let Some(op) = <Option<Operator>>::from(&op.token) else {
                         let loc = ErrLoc::at(&op.lexeme);
                         let msg = "Expect operator token.";
@@ -718,7 +718,7 @@ macro_rules! rule {
                         unreachable!("matched and advanced to an existing token");
                     };
 
-                    let mut span = kw_super.span.clone();
+                    let mut span = kw_super.span;
 
                     // parse .
                     span += self.dot(|| format!("after '{Super}'"))?;
@@ -761,7 +761,7 @@ macro_rules! rule {
                         }
 
                         Ok(LexToken { lexeme, span, .. }) => {
-                            let span = span.clone();
+                            let span = *span;
                             let loc = ErrLoc::at(lexeme);
                             let msg = "Expect ')' after expression.";
                             Err(self.error(span, msg, loc))
@@ -775,7 +775,7 @@ macro_rules! rule {
                 }
 
                 Ok(LexToken { lexeme, span, .. }) => {
-                    let span = span.clone();
+                    let span = *span;
                     let loc = ErrLoc::at(lexeme);
                     Err(self.error(span, "Expect expression.", loc))
                 },
@@ -860,7 +860,7 @@ macro_rules! rule {
                     return Ok(None);
                 };
 
-                let span = span.clone();
+                let span = *span;
                 let _ = self.advance()?;
                 Ok(Some(span))
             }
@@ -880,21 +880,18 @@ macro_rules! rule {
                         token: Token::$t$((Keyword::$kw))?,
                         span,
                         ..
-                    }) => Ok(span.clone()),
+                    }) => Ok(*span),
 
                     Ok(LexToken { lexeme, span, .. }) => {
-                        let span = span.clone();
+                        let span = *span;
                         let loc = ErrLoc::at(lexeme);
                         let msg = format!("Expect '{}' {}.", Token::$t$((Keyword::$kw))?, ctx());
                         Err(self.error(span, msg, loc))
                     }
 
                     Err(lineno) => {
-                        // FIXME: proper span
-                        let mut span = Span::empty();
-                        span.lineno = lineno;
                         let msg = format!("Expect '{}' {}.", Token::$t$((Keyword::$kw))?, ctx());
-                        Err(self.error(span, msg, ErrLoc::Eof))
+                        Err(self.error(Span::line(lineno), msg, ErrLoc::Eof))
                     }
                 }
             }
@@ -942,13 +939,13 @@ impl<'a> Parser<'a> {
             None => Ok(Err(self
                 .current
                 .as_ref()
-                .map(|t| t.span.clone())
+                .map(|t| t.span)
                 .unwrap_or_else(Span::empty))),
         }
     }
 
-    fn advance(&mut self) -> Result<Result<&LexToken<'a>, usize>, SyntaxError> {
-        let line = self.current.as_ref().map_or(0, |t| t.span.lineno);
+    fn advance(&mut self) -> Result<Result<&LexToken<'a>, u32>, SyntaxError> {
+        let line = self.current.as_ref().map_or(0, |t| t.span.lineno());
         Ok(match self.tokens.next().transpose()? {
             Some(t) => {
                 let _ = self.current.insert(t);
@@ -976,8 +973,6 @@ impl<'a> Parser<'a> {
 
         let t = self.current.as_ref()?;
 
-        let span = t.span.clone();
-
         let literal = match &t.token {
             Token::Keyword(True) => ir::Literal::Bool(true),
             Token::Keyword(False) => ir::Literal::Bool(false),
@@ -985,17 +980,20 @@ impl<'a> Parser<'a> {
             Token::Literal(Str(s)) => ir::Literal::Str(Rc::new(s.to_string())),
             Token::Literal(Num(n)) => ir::Literal::Num(*n),
             Token::Literal(Ident(x)) => {
-                let ident = self.reigister_ident(x.to_string(), span);
+                let ident = self.reigister_ident(x.to_string(), t.span);
                 return Some(ir::Atom::from(ident));
             }
             Token::Keyword(keyword @ (Super | This)) => {
-                let ident = self.reigister_ident(keyword.to_string(), span);
+                let ident = self.reigister_ident(keyword.to_string(), t.span);
                 return Some(ir::Atom::from(ident));
             }
             _ => ir::Literal::Nil,
         };
 
-        Some(ir::Atom { literal, span })
+        Some(ir::Atom {
+            literal,
+            span: t.span,
+        })
     }
 
     fn identifier<C, D>(&mut self, ctx: C) -> Result<Ident, SyntaxError>
@@ -1010,23 +1008,20 @@ impl<'a> Parser<'a> {
                 ..
             }) => {
                 let name = ident.to_string();
-                let span = span.clone();
+                let span = *span;
                 Ok(self.reigister_ident(name, span))
             }
 
             Ok(LexToken { lexeme, span, .. }) => {
-                let span = span.clone();
+                let span = *span;
                 let loc = ErrLoc::at(lexeme);
                 let msg = format!("Expect {}.", ctx());
                 Err(self.error(span, msg, loc))
             }
 
             Err(lineno) => {
-                // FIXME: proper span
-                let mut span = Span::empty();
-                span.lineno = lineno;
                 let msg = format!("Expect {}.", ctx());
-                Err(self.error(span, msg, ErrLoc::Eof))
+                Err(self.error(Span::line(lineno), msg, ErrLoc::Eof))
             }
         }
     }

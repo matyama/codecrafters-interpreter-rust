@@ -39,7 +39,7 @@ pub struct TokenStream<'prg> {
     /// Character stream from the input `prg`
     chars: Peekable<Chars<'prg>>,
     /// Current line number in the input `prg`
-    line: usize,
+    line: u32,
     /// Offset of the start of current line
     line_pos: usize,
 }
@@ -81,12 +81,12 @@ impl<'prg> TokenStream<'prg> {
 
     #[inline]
     fn span(&self, offset: usize, length: usize) -> Span {
-        Span {
-            offset,
-            length,
-            lineno: self.line + 1,
-            lineof: self.line_pos,
-        }
+        Span::new(
+            offset as u32,
+            length as u32,
+            self.line + 1,
+            self.line_pos as u32,
+        )
     }
 
     /// Advance current character stream cursor to the next character boundary
@@ -222,12 +222,12 @@ impl<'prg> Iterator for TokenStream<'prg> {
                         self.advance_pos();
                     } else {
                         // NOTE: imbalanced string quotes require manual tracking of the init line
-                        let span = Span {
-                            offset: start,
-                            length: self.pos - start,
+                        let span = Span::new(
+                            start as u32,
+                            (self.pos - start) as u32,
                             lineno,
-                            lineof,
-                        };
+                            lineof as u32,
+                        );
                         return Some(Err(self.error_from(span, "Unterminated string.")));
                     };
 
@@ -404,32 +404,17 @@ mod tests {
             LexToken {
                 lexeme: Cow::Borrowed(","),
                 token: Token::Comma,
-                span: Span {
-                    offset: 0,
-                    length: 1,
-                    lineno: 1,
-                    lineof: 0,
-                },
+                span: Span::new(0, 1, 1, 0),
             },
             LexToken {
                 lexeme: Cow::Borrowed("."),
                 token: Token::Dot,
-                span: Span {
-                    offset: 1,
-                    length: 1,
-                    lineno: 1,
-                    lineof: 0,
-                },
+                span: Span::new(1, 1, 1, 0),
             },
             LexToken {
                 lexeme: Cow::Borrowed("("),
                 token: Token::LeftParen,
-                span: Span {
-                    offset: 3,
-                    length: 1,
-                    lineno: 1,
-                    lineof: 0,
-                },
+                span: Span::new(3, 1, 1, 0),
             },
         ];
 
@@ -440,25 +425,9 @@ mod tests {
         };
 
         assert_eq!(err1.source.to_string(), "Unexpected character: $");
-        assert_eq!(
-            err1.span,
-            Span {
-                offset: 2,
-                length: 1,
-                lineno: 1,
-                lineof: 0,
-            }
-        );
+        assert_eq!(err1.span, Span::new(2, 1, 1, 0));
 
         assert_eq!(err2.source.to_string(), "Unexpected character: #");
-        assert_eq!(
-            err2.span,
-            Span {
-                offset: 4,
-                length: 1,
-                lineno: 1,
-                lineof: 0,
-            }
-        );
+        assert_eq!(err2.span, Span::new(4, 1, 1, 0));
     }
 }

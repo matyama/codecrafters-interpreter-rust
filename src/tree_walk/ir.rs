@@ -550,12 +550,7 @@ mod tests {
 
     #[test]
     fn pretty_print() {
-        const DUMMY_SPAN: Span = Span {
-            offset: 0,
-            length: 0,
-            lineno: 0,
-            lineof: 0,
-        };
+        const DUMMY_SPAN: Span = Span::empty();
 
         let expr = Expr::binary(
             Operator::Star,
@@ -563,18 +558,18 @@ mod tests {
                 Operator::Minus,
                 Expr::Atom(Atom {
                     literal: Literal::Num(123.0),
-                    span: DUMMY_SPAN.clone(),
+                    span: DUMMY_SPAN,
                 }),
-                DUMMY_SPAN.clone(),
+                DUMMY_SPAN,
             ),
             Expr::group(
                 Expr::Atom(Atom {
                     literal: Literal::Num(45.67),
-                    span: DUMMY_SPAN.clone(),
+                    span: DUMMY_SPAN,
                 }),
-                DUMMY_SPAN.clone(),
+                DUMMY_SPAN,
             ),
-            DUMMY_SPAN.clone(),
+            DUMMY_SPAN,
         );
 
         assert_eq!("(* (- 123.0) (group 45.67))", expr.to_string());

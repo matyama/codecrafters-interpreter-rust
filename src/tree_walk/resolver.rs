@@ -161,7 +161,7 @@ impl<'a> Context<'a> {
                 Entry::Occupied(entry) => {
                     return Err(SyntaxError::new(
                         self.source,
-                        span.clone(),
+                        *span,
                         "Already a variable with this name in this scope.",
                         ErrLoc::at(entry.key()),
                     ));
@@ -337,7 +337,7 @@ impl Resolve for ir::Atom {
         if cx.is_undefined(name) {
             return Err(SyntaxError::new(
                 cx.source,
-                self.span.clone(),
+                self.span,
                 "Can't read local variable in its own initializer.",
                 ErrLoc::at(name),
             ));
@@ -347,7 +347,7 @@ impl Resolve for ir::Atom {
             ClassType::None if matches!(name.as_str(), SUPER | THIS) => {
                 return Err(SyntaxError::new(
                     cx.source,
-                    self.span.clone(),
+                    self.span,
                     format!("Can't use '{name}' outside of a class."),
                     ErrLoc::at(name),
                 ));
@@ -355,7 +355,7 @@ impl Resolve for ir::Atom {
             ClassType::Class if name == SUPER => {
                 return Err(SyntaxError::new(
                     cx.source,
-                    self.span.clone(),
+                    self.span,
                     "Can't use 'super' in a class with no superclass.",
                     ErrLoc::at(name),
                 ))
@@ -395,7 +395,7 @@ impl Resolve for ir::Cons {
                     let [obj, _prop] = args.as_slice() else {
                         return Err(SyntaxError::new(
                             cx.source,
-                            self.span.clone(),
+                            self.span,
                             "Operand must be a set expression",
                             ErrLoc::at(self.op),
                         ));
@@ -410,7 +410,7 @@ impl Resolve for ir::Cons {
 
                 _ => Err(SyntaxError::new(
                     cx.source,
-                    self.span.clone(),
+                    self.span,
                     "Operands must be l-value and r-value.",
                     ErrLoc::at(self.op),
                 )),
@@ -459,7 +459,7 @@ impl Resolve for ir::Class {
             })) if super_name == &self.name => {
                 return Err(SyntaxError::new(
                     cx.source,
-                    self.span.clone(),
+                    self.span,
                     "A class can't inherit from itself.",
                     ErrLoc::at(super_name),
                 ));
@@ -606,7 +606,7 @@ impl Resolve for ir::Return {
             FunctionType::None => {
                 return Err(SyntaxError::new(
                     cx.source,
-                    self.span.clone(),
+                    self.span,
                     "Can't return from top-level code.",
                     ErrLoc::at(Keyword::Return),
                 ));
@@ -615,7 +615,7 @@ impl Resolve for ir::Return {
             FunctionType::Initializer if self.value.is_some() => {
                 return Err(SyntaxError::new(
                     cx.source,
-                    self.span.clone(),
+                    self.span,
                     "Can't return a value from an initializer.",
                     ErrLoc::at(Keyword::Return),
                 ));

@@ -5,7 +5,7 @@ use std::process::{ExitCode, Termination};
 use crate::span::Span;
 
 #[derive(thiserror::Error)]
-#[error("[line {}] Error{context}: {source}", span.lineno)]
+#[error("[line {}] Error{context}: {source}", span.lineno())]
 pub struct SyntaxError {
     pub span: Span,
     pub code: String,
@@ -49,7 +49,7 @@ impl Termination for SyntaxError {
 }
 
 #[derive(thiserror::Error)]
-#[error("{source}\n[line {}]", span.lineno)]
+#[error("{source}\n[line {}]", span.lineno())]
 pub struct RuntimeError {
     pub span: Span,
     pub source: Box<dyn std::error::Error + 'static>,
@@ -103,12 +103,7 @@ mod tests {
     #[test]
     fn display_syntax_error() {
         let error = SyntaxError {
-            span: Span {
-                offset: 25,
-                length: 1,
-                lineno: 1,
-                lineof: 25,
-            },
+            span: Span::new(25, 1, 1, 25),
             code: r#"var result = (a + b) > 7 && "Success" != "Failure" or x >= 5"#.to_string(),
             context: " at 'IDENTIFIER & null'".into(),
             source: "Unexpected character: &".to_string().into(),
@@ -120,12 +115,7 @@ mod tests {
 
     #[test]
     fn display_runtime_error() {
-        let span = Span {
-            offset: 25,
-            length: 10,
-            lineno: 1,
-            lineof: 25,
-        };
+        let span = Span::new(25, 10, 1, 25);
 
         let error = span.throw("Operands must be numbers.");
 

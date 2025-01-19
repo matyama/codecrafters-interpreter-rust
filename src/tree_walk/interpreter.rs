@@ -433,7 +433,7 @@ impl Instance {
                     .map(Value::new)
             })
             .ok_or_else(|| RuntimeError {
-                span: span.clone(),
+                span: *span,
                 source: format!("Undefined property '{name}'.").into(),
             })
     }
