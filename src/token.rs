@@ -53,25 +53,45 @@ impl<'a> TryFrom<&'a str> for Keyword {
     type Error = &'a str;
 
     fn try_from(ident: &'a str) -> Result<Self, Self::Error> {
-        Ok(match ident {
-            "and" => Self::And,
-            "class" => Self::Class,
-            "else" => Self::Else,
-            "false" => Self::False,
-            "for" => Self::For,
-            "fun" => Self::Fun,
-            "if" => Self::If,
-            "nil" => Self::Nil,
-            "or" => Self::Or,
-            "print" => Self::Print,
-            "return" => Self::Return,
-            "super" => Self::Super,
-            "this" => Self::This,
-            "true" => Self::True,
-            "var" => Self::Var,
-            "while" => Self::While,
-            ident => return Err(ident),
-        })
+        macro_rules! check {
+            ($start:literal, $length:literal, $rest:literal => $kw:ident) => {{
+                #[allow(deprecated)]
+                let start = crate::lexer::unstable::ceil_char_boundary(ident, $start);
+                if ident.len() == $start + $length && &ident.as_bytes()[start..] == $rest {
+                    Ok(Self::$kw)
+                } else {
+                    Err(ident)
+                }
+            }};
+        }
+
+        let mut chars = ident.chars();
+
+        match chars.next() {
+            Some('a') => check!(1, 2, b"nd" => And),
+            Some('c') => check!(1, 4, b"lass" => Class),
+            Some('e') => check!(1, 3, b"lse" => Else),
+            Some('f') => match chars.next() {
+                Some('a') => check!(2, 3, b"lse" => False),
+                Some('o') => check!(2, 1, b"r" => For),
+                Some('u') => check!(2, 1, b"n" => Fun),
+                _ => Err(ident),
+            },
+            Some('i') => check!(1, 1, b"f" => If),
+            Some('n') => check!(1, 2, b"il" => Nil),
+            Some('o') => check!(1, 1, b"r" => Or),
+            Some('p') => check!(1, 4, b"rint" => Print),
+            Some('r') => check!(1, 5, b"eturn" => Return),
+            Some('s') => check!(1, 4, b"uper" => Super),
+            Some('t') => match chars.next() {
+                Some('h') => check!(2, 2, b"is" => This),
+                Some('r') => check!(2, 2, b"ue" => True),
+                _ => Err(ident),
+            },
+            Some('v') => check!(1, 2, b"ar" => Var),
+            Some('w') => check!(1, 4, b"hile" => While),
+            _ => Err(ident),
+        }
     }
 }
 
